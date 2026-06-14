@@ -416,49 +416,56 @@ function calcTileSize() {
       backgroundSize が未適用のまま表示されることがある。
 ================================================================ */
 function renderBoard() {
-  const bd  = document.getElementById('puzzle-board');
-  const ts  = tileSize;
-  const g   = GAP;
-  const imgPx = ts * 4 + g * 3; // 4タイル分の総幅=高さ
+  const bd    = document.getElementById('puzzle-board');
+  const ts    = tileSize;
+  const g     = GAP;
+  const imgPx = ts * 4 + g * 3; // SVG全体をこのサイズに縮小
 
-  // CSS変数(グリッドサイズ用)
   bd.style.setProperty('--ts',  ts + 'px');
   bd.style.setProperty('--gap', g  + 'px');
-
   bd.innerHTML = '';
 
   for (let idx = 0; idx < TOTAL; idx++) {
     const div = document.createElement('div');
+    div.style.width  = ts + 'px';
+    div.style.height = ts + 'px';
 
     if (!isValid(idx)) {
-      div.className = 'tile ghost';
+      // ghost: B1/C1/D1 — レイアウト用の不可視セル
+      div.style.visibility    = 'hidden';
+      div.style.pointerEvents = 'none';
       bd.appendChild(div);
       continue;
     }
 
     const val = board[idx];
+    const isEmpty = (val === 0 || val === null || val === undefined);
 
-    // null・undefined・0 すべて空白スロットとして扱う
-    if (val === 0 || val === null || val === undefined) {
-      // 空白スロット
-      div.className = 'tile empty';
+    if (isEmpty) {
+      // ── 空白スロット ──
+      // インラインで背景を完全にリセット（!importantに頼らない）
+      div.style.backgroundColor = 'rgba(0,0,0,0.28)';
+      div.style.backgroundImage = 'none';
+      div.style.boxShadow       = 'inset 0 2px 10px rgba(0,0,0,0.5)';
+      div.style.borderRadius    = '10px';
+      div.style.cursor          = 'default';
     } else {
-      // 画像ピース val=1〜16
-      div.className = 'tile';
-
-      // val=1→(col=0,row=0), val=4→(col=3,row=0), val=5→(col=0,row=1) ...
+      // ── 画像ピース (val=1〜16) ──
       const pieceCol = (val - 1) % 4;
       const pieceRow = Math.floor((val - 1) / 4);
       const bgX = -(pieceCol * (ts + g));
       const bgY = -(pieceRow * (ts + g));
 
-      // ★ backgroundSize と backgroundPosition を同時にインラインで設定
       div.style.backgroundImage    = `url('${IMG_SRC}')`;
       div.style.backgroundSize     = `${imgPx}px ${imgPx}px`;
       div.style.backgroundPosition = `${bgX}px ${bgY}px`;
       div.style.backgroundRepeat   = 'no-repeat';
+      div.style.backgroundClip     = 'padding-box';
+      div.style.borderRadius       = '10px';
+      div.style.boxShadow          = '0 3px 8px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.18)';
+      div.style.cursor             = 'pointer';
 
-      // 番号補助
+      // 番号
       const num = document.createElement('span');
       num.className   = 'tile-num';
       num.textContent = val;
