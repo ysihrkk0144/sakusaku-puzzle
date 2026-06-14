@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0077B6">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="さくさくスライドパズル">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <title>さくさくスライドパズル</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --coral:      #FF6B6B;
+      --coral-dark: #C62828;
+      --white:      #FFFFFF;
+      --text:       #E8F4FD;
+      --muted:      #90CAF9;
+      --gold:       #FFD54F;
+      --surface:    rgba(2,62,138,0.82);
+    }
+    html, body {
+      height: 100%; overflow: hidden;
+      font-family: 'Hiragino Sans','Yu Gothic UI','Meiryo',sans-serif;
+      background: #023E8A; color: var(--text);
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* ── 画面管理 ── */
+    .screen {
+      position: fixed; inset: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      transition: opacity .3s, transform .3s;
+    }
+    .screen.hidden { opacity:0; pointer-events:none; transform:scale(.97) translateY(10px); }
+
+    /* ════ タイトル画面 ════ */
+    #title-screen {
+      background: radial-gradient(ellipse at 50% 15%, #0096C7 0%, transparent 55%),
+                  linear-gradient(180deg,#023E8A 0%,#012A5E 100%);
+      gap: 20px;
+    }
+    .title-waves { position:absolute; bottom:0; left:0; right:0; height:130px; overflow:hidden; pointer-events:none; }
+    .title-waves svg { position:absolute; bottom:0; width:200%; animation: waveScroll 8s linear infinite; }
+    .title-waves svg:nth-child(2){ animation-delay:-4s; opacity:.5; }
+    @keyframes waveScroll { to { transform:translateX(-50%); } }
+
+    .title-logo { text-align:center; }
+    .title-sub { font-size:11px; letter-spacing:.35em; color:#90E0EF; margin-bottom:5px; }
+    .title-main {
+      font-size: clamp(20px,6.5vw,34px); font-weight:900; letter-spacing:.06em;
+      background: linear-gradient(135deg,#fff 20%,#90E0EF 60%,var(--gold) 100%);
+      -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;
+    }
+    .title-deco { width:50px; height:3px; background:linear-gradient(90deg,#00B4D8,var(--gold)); margin:8px auto 0; border-radius:2px; }
+
+    .title-btns { display:flex; flex-direction:column; gap:11px; width:min(270px,84vw); }
+
+    /* コースボタン */
+    .btn-course {
+      border:none; border-radius:13px; font-family:inherit;
+      font-size:15px; font-weight:700; letter-spacing:.06em;
+      cursor:pointer; transition:transform .12s, opacity .12s;
+      width:100%; padding:0;
+      display:flex; align-items:center;
+      overflow:hidden;
+    }
+    .btn-course:active { transform:scale(.95); opacity:.85; }
+    .course-badge {
+      width:64px; padding:14px 0;
+      display:flex; flex-direction:column;
+      align-items:center; justify-content:center;
+      font-size:11px; font-weight:900; letter-spacing:.05em;
+      gap:2px; flex-shrink:0;
+    }
+    .course-badge .badge-icon { font-size:20px; }
+    .course-body {
+      flex:1; padding:12px 14px; text-align:left;
+    }
+    .course-name { font-size:16px; font-weight:900; }
+    .course-desc { font-size:11px; opacity:.75; margin-top:2px; }
+
+    /* 上級: 赤系 */
+    .btn-hard   { background:linear-gradient(135deg,#B71C1C,#880E4F); color:#fff; box-shadow:0 5px 18px rgba(183,28,28,.4); }
+    .btn-hard .course-badge { background:rgba(0,0,0,.2); }
+    /* 中級: 青系 */
+    .btn-mid    { background:linear-gradient(135deg,#0077B6,#023E8A); color:#fff; box-shadow:0 5px 18px rgba(0,119,182,.4); }
+    .btn-mid .course-badge { background:rgba(0,0,0,.2); }
+    /* 初級: 緑系 */
+    .btn-easy   { background:linear-gradient(135deg,#2E7D32,#1B5E20); color:#fff; box-shadow:0 5px 18px rgba(46,125,50,.4); }
+    .btn-easy .course-badge { background:rgba(0,0,0,.2); }
+    /* 記録 */
+    .btn-record { background:linear-gradient(135deg,#E65100,#BF360C); color:#fff; box-shadow:0 5px 18px rgba(230,81,0,.45); border:none; }
+    .btn-record .course-badge { background:rgba(0,0,0,.18); }
+
+    /* ════ 共通ボタン ════ */
+    .btn {
+      border:none; border-radius:13px; font-family:inherit;
+      font-size:15px; font-weight:700; letter-spacing:.08em;
+      cursor:pointer; transition:transform .12s, opacity .12s;
+      width:100%; padding:13px 0;
+      display:flex; align-items:center; justify-content:center; gap:7px;
+    }
+    .btn:active { transform:scale(.95); opacity:.85; }
+    .btn-primary   { background:linear-gradient(135deg,var(--coral),var(--coral-dark)); color:#fff; box-shadow:0 5px 18px rgba(198,40,40,.4); }
+    .btn-secondary { background:var(--surface); color:var(--text); border:1px solid rgba(255,255,255,.12); backdrop-filter:blur(8px); }
+    .btn-sm { font-size:13px; padding:8px 16px; width:auto; border-radius:8px; }
+
+    /* ════ ゲーム画面 ════ */
+    #game-screen { justify-content:flex-start; padding:0; }
+
+    .game-header {
+      width:100%; backdrop-filter:blur(10px);
+      border-bottom:1px solid rgba(255,255,255,.08);
+      padding:10px 14px 8px;
+      display:flex; align-items:center; gap:12px; flex-shrink:0;
+    }
+    /* コース別ヘッダー色 */
+    .game-header.hard { background:rgba(120,0,30,.92); }
+    .game-header.mid  { background:rgba(1,42,94,.92); }
+    .game-header.easy { background:rgba(20,70,20,.92); }
+
+    /* コース別ゲーム背景 */
+    #game-screen.hard { background:linear-gradient(180deg,#4A0000,#880E4F 50%,#6A1B4D 100%); }
+    #game-screen.mid  { background:linear-gradient(180deg,#012A5E,#023E8A 50%,#01579B 100%); }
+    #game-screen.easy { background:linear-gradient(180deg,#1B5E20,#2E7D32 50%,#33691E 100%); }
+
+    .header-info { flex:1; }
+    .header-label { font-size:9px; color:var(--muted); letter-spacing:.2em; text-transform:uppercase; margin-bottom:1px; }
+    .stopwatch { font-size:26px; font-weight:900; font-variant-numeric:tabular-nums; color:var(--gold); line-height:1; }
+    .moves-label { font-size:10px; color:var(--muted); margin-top:2px; }
+    .moves-label strong { color:var(--white); font-size:13px; }
+    .course-tag { font-size:10px; color:rgba(255,255,255,.6); margin-bottom:2px; letter-spacing:.05em; }
+
+    .btn-shuffle {
+      background:linear-gradient(135deg,var(--coral),var(--coral-dark));
+      color:#fff; border:none; border-radius:10px; font-family:inherit;
+      font-size:13px; font-weight:700; padding:9px 13px;
+      cursor:pointer; transition:transform .12s; white-space:nowrap; flex-shrink:0;
+    }
+    .btn-shuffle:active { transform:scale(.93); }
+
+    .puzzle-area {
+      flex:1; display:flex; flex-direction:column;
+      align-items:center; justify-content:center;
+      gap:10px; padding:10px; width:100%; overflow:hidden;
+    }
+    .status-bar { font-size:13px; color:var(--muted); letter-spacing:.06em; height:18px; text-align:center; flex-shrink:0; }
+    .status-bar.cleared { color:var(--gold); font-weight:700; }
+
+    .puzzle-board {
+      display: grid;
+      gap: var(--gap);
+      flex-shrink: 0;
+    }
+    .game-footer { display:flex; gap:10px; flex-shrink:0; }
+
+    /* ════ 記録画面 ════ */
+    #record-screen { background:linear-gradient(180deg,#012A5E,#023E8A 100%); justify-content:flex-start; padding:0; }
+    .record-header {
+      width:100%; background:rgba(1,42,94,.92); backdrop-filter:blur(10px);
+      border-bottom:1px solid rgba(255,255,255,.08);
+      padding:14px 18px; display:flex; align-items:center; justify-content:space-between; flex-shrink:0;
+    }
+    .record-header h2 { font-size:18px; font-weight:900; }
+    .record-tabs { display:flex; gap:6px; padding:12px 14px 4px; flex-shrink:0; width:100%; }
+    .tab-btn {
+      flex:1; padding:7px 4px; border:none; border-radius:8px; font-family:inherit;
+      font-size:12px; font-weight:700; cursor:pointer; transition:.12s;
+      background:rgba(255,255,255,.1); color:rgba(255,255,255,.6);
+    }
+    .tab-btn.active { background:rgba(255,255,255,.22); color:white; }
+    .record-body { flex:1; overflow-y:auto; width:100%; padding:10px 14px; display:flex; flex-direction:column; gap:9px; }
+    .record-item {
+      background:var(--surface); backdrop-filter:blur(8px);
+      border:1px solid rgba(255,255,255,.08); border-radius:12px;
+      padding:11px 15px; display:flex; align-items:center; gap:12px;
+    }
+    .rank-badge { font-size:20px; width:26px; text-align:center; flex-shrink:0; }
+    .record-info { flex:1; }
+    .record-time { font-size:21px; font-weight:900; color:var(--gold); font-variant-numeric:tabular-nums; line-height:1; }
+    .record-meta { font-size:11px; color:var(--muted); margin-top:3px; }
+    .record-empty { text-align:center; color:var(--muted); font-size:14px; padding:50px 0; line-height:2.2; }
+
+    /* ════ クリアモーダル ════ */
+    .modal-overlay {
+      position:fixed; inset:0; background:rgba(0,20,60,.78);
+      display:flex; align-items:center; justify-content:center;
+      z-index:200; backdrop-filter:blur(6px); transition:opacity .3s;
+    }
+    .modal-overlay.hidden { opacity:0; pointer-events:none; }
+    .modal {
+      background:linear-gradient(160deg,#0077B6,#012A5E);
+      border:1px solid rgba(255,255,255,.12); border-radius:22px;
+      padding:32px 28px 26px; text-align:center;
+      width:min(88vw,300px); box-shadow:0 24px 64px rgba(0,0,0,.6);
+    }
+    .modal-emoji { font-size:48px; display:block; margin-bottom:6px; }
+    .modal h2 { font-size:22px; font-weight:900; color:var(--gold); margin-bottom:3px; }
+    .modal-course { font-size:12px; color:var(--muted); margin-bottom:2px; }
+    .modal-time { font-size:36px; font-weight:900; font-variant-numeric:tabular-nums; color:#fff; margin:10px 0 3px; }
+    .modal-moves { font-size:13px; color:var(--muted); margin-bottom:22px; }
+    .modal-btns { display:flex; gap:10px; }
+    .modal-btns .btn { flex:1; padding:11px 0; }
+
+    @media (prefers-reduced-motion:reduce) {
+      .puzzle-board div,.screen,.modal-overlay,.title-waves svg { transition:none!important; animation:none!important; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ══ タイトル ══ -->
+<div id="title-screen" class="screen">
+  <div class="title-waves" aria-hidden="true">
+    <svg viewBox="0 0 1200 120" preserveAspectRatio="none" height="120">
+      <path d="M0,60 Q150,20 300,60 Q450,100 600,60 Q750,20 900,60 Q1050,100 1200,60 L1200,120 L0,120 Z" fill="rgba(0,180,216,.18)"/>
+    </svg>
+    <svg viewBox="0 0 1200 120" preserveAspectRatio="none" height="120">
+      <path d="M0,80 Q150,40 300,80 Q450,120 600,80 Q750,40 900,80 Q1050,120 1200,80 L1200,120 L0,120 Z" fill="rgba(0,180,216,.10)"/>
+    </svg>
+  </div>
+  <div class="title-logo">
+    <p class="title-sub">✦ Slide Puzzle ✦</p>
+    <h1 class="title-main">さくさくスライドパズル</h1>
+    <div class="title-deco"></div>
+  </div>
+  <div class="title-btns">
+    <button class="btn-course btn-hard"   id="btn-hard">
+      <div class="course-badge"><span class="badge-icon">🏙️</span>上級</div>
+      <div class="course-body"><div class="course-name">上級コース (5×5)</div><div class="course-desc">25ピース ・ 京都っぽい</div></div>
+    </button>
+    <button class="btn-course btn-mid"    id="btn-mid">
+      <div class="course-badge"><span class="badge-icon">🐟</span>中級</div>
+      <div class="course-body"><div class="course-name">中級コース (4×4)</div><div class="course-desc">16ピース ・ 和歌山っぽい</div></div>
+    </button>
+    <button class="btn-course btn-easy"   id="btn-easy">
+      <div class="course-badge"><span class="badge-icon">🐰</span>初級</div>
+      <div class="course-body"><div class="course-name">初級コース (3×3)</div><div class="course-desc">9ピース ・ 長野っぽい</div></div>
+    </button>
+    <button class="btn-course btn-record" id="btn-to-record" style="margin-top:14px;">
+      <div class="course-badge"><span class="badge-icon">🏆</span>記録</div>
+      <div class="course-body"><div class="course-name">ベスト記録</div><div class="course-desc">コース別ランキング</div></div>
+    </button>
+  </div>
+</div>
+
+<!-- ══ ゲーム画面 ══ -->
+<div id="game-screen" class="screen hidden mid">
+  <div class="game-header mid" id="game-header">
+    <div class="header-info">
+      <div class="course-tag" id="course-tag">中級コース (4×4)</div>
+      <div class="header-label">TIME</div>
+      <div class="stopwatch" id="stopwatch">00:00.0</div>
+      <div class="moves-label">手数 <strong id="move-count">0</strong></div>
+    </div>
+    <button class="btn-shuffle" id="btn-shuffle">🔀 シャッフル</button>
+  </div>
+  <div class="puzzle-area">
+    <div class="status-bar" id="status-bar">シャッフルしてスタート！</div>
+    <div class="puzzle-board" id="puzzle-board"></div>
+    <div class="game-footer">
+      <button class="btn btn-secondary btn-sm" id="btn-game-back">← タイトル</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 記録画面 ══ -->
+<div id="record-screen" class="screen hidden">
+  <div class="record-header">
+    <h2>🏆 ベスト記録</h2>
+    <button class="btn btn-secondary btn-sm" id="btn-record-back">← 戻る</button>
+  </div>
+  <div class="record-tabs">
+    <button class="tab-btn" id="tab-hard"  onclick="switchTab('hard')">🏙️ 上級</button>
+    <button class="tab-btn active" id="tab-mid" onclick="switchTab('mid')">🐟 中級</button>
+    <button class="tab-btn" id="tab-easy"  onclick="switchTab('easy')">🐰 初級</button>
+  </div>
+  <div class="record-body" id="record-body"></div>
+</div>
+
+<!-- ══ クリアモーダル ══ -->
+<div class="modal-overlay hidden" id="modal-overlay">
+  <div class="modal">
+    <span class="modal-emoji">🎉</span>
+    <h2>クリア！</h2>
+    <div class="modal-course" id="modal-course"></div>
+    <div class="modal-time"   id="modal-time">--:--.-</div>
+    <div class="modal-moves"  id="modal-moves"></div>
+    <div class="modal-btns">
+      <button class="btn btn-secondary" id="modal-retry">もう一度</button>
+      <button class="btn btn-primary"   id="modal-title">タイトル</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ================================================================
+   コース定義
+   ─────────────────────────────────────────────────────────────
+   各コース共通: L字型盤面 (空白が左上1マス飛び出し)
+   cols×rows のグリッドで、row0はcol=0のみ有効
+
+   easy: 3×3ピース → cols=3, rows=4, 有効=1+9=10マス, ピース=9
+   mid:  4×4ピース → cols=4, rows=5, 有効=1+16=17マス, ピース=16
+   hard: 5×5ピース → cols=5, rows=6, 有効=1+25=26マス, ピース=25
+================================================================ */
+const COURSES = {
+  easy: { id:'easy', cols:3, rows:4, pieces:9,  img:'puzzle-easy.jpg', label:'初級コース (3×3)', emoji:'🐰', cls:'easy' },
+  mid:  { id:'mid',  cols:4, rows:5, pieces:16, img:'puzzle-normal.jpg', label:'中級コース (4×4)', emoji:'🐟', cls:'mid'  },
+  hard: { id:'hard', cols:5, rows:6, pieces:25, img:'puzzle-hard.jpg', label:'上級コース (5×5)', emoji:'🏙️', cls:'hard' },
+};
+
+/* ================================================================
+   盤面ユーティリティ
+================================================================ */
+function buildValid(cols, rows) {
+  const total = cols * rows;
+  const valid = [];
+  for (let i = 0; i < total; i++) {
+    const r = Math.floor(i / cols), c = i % cols;
+    if (r === 0 && c !== 0) continue; // row0はcol=0のみ
+    valid.push(i);
+  }
+  return valid; // valid[0]=空白, valid[1〜pieces]=ピース
+}
+
+function getNeighbors(idx, cols, rows, valid) {
+  const total = cols * rows;
+  const r = Math.floor(idx / cols), c = idx % cols;
+  const cands = [];
+  if (r > 0)        cands.push(idx - cols);
+  if (r < rows - 1) cands.push(idx + cols);
+  if (c > 0)        cands.push(idx - 1);
+  if (c < cols - 1) cands.push(idx + 1);
+  return cands.filter(n => n >= 0 && n < total && valid.includes(n));
+}
+
+/* ================================================================
+   パズル状態
+================================================================ */
+let currentCourse = COURSES.mid;
+let board    = [];
+let emptyIdx = 0;
+let validCells = [];
+let moveCount = 0, running = false, cleared = false;
+
+function initSolved() {
+  const { cols, rows, pieces } = currentCourse;
+  validCells = buildValid(cols, rows);
+  const total = cols * rows;
+  board = Array(total).fill(null);
+  board[validCells[0]] = 0;
+  emptyIdx = validCells[0];
+  for (let i = 1; i <= pieces; i++) board[validCells[i]] = i;
+}
+
+function shuffle() {
+  initSolved();
+  const { cols, rows } = currentCourse;
+  let prev = -1;
+  for (let i = 0; i < 1000; i++) {
+    const ns = getNeighbors(emptyIdx, cols, rows, validCells).filter(n => n !== prev);
+    if (!ns.length) continue;
+    const pick = ns[Math.floor(Math.random() * ns.length)];
+    if (board[pick] === null || board[pick] === undefined) continue;
+    prev = emptyIdx;
+    board[emptyIdx] = board[pick];
+    board[pick] = 0;
+    emptyIdx = pick;
+  }
+}
+
+function handleClick(idx) {
+  if (!running || cleared) return;
+  const { cols, rows } = currentCourse;
+  if (!getNeighbors(emptyIdx, cols, rows, validCells).includes(idx)) return;
+  board[emptyIdx] = board[idx]; board[idx] = 0; emptyIdx = idx;
+  moveCount++;
+  document.getElementById('move-count').textContent = moveCount;
+  renderBoard();
+  if (isSolved()) { cleared = true; stopTimer(); setTimeout(showClearModal, 350); }
+}
+
+function isSolved() {
+  return validCells.every((ci, i) => board[ci] === (i === 0 ? 0 : i));
+}
+
+/* ================================================================
+   描画
+================================================================ */
+const GAP = 4;
+let tileSize = 64;
+
+function calcTileSize() {
+  const { cols, rows } = currentCourse;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const headerH = 82, otherH = 70, padW = 16, padH = 12;
+  const availW = vw - padW - GAP * (cols - 1);
+  const availH = vh - headerH - otherH - padH - GAP * (rows - 1);
+  tileSize = Math.max(38, Math.min(Math.floor(availW / cols), Math.floor(availH / rows), 108));
+}
+
+function renderBoard() {
+  const bd = document.getElementById('puzzle-board');
+  const { cols, rows, pieces, img } = currentCourse;
+  const total = cols * rows;
+  const ts = tileSize, g = GAP;
+  const imgPx = ts * cols + g * (cols - 1); // SVG全体を縮小するサイズ
+
+  bd.style.gridTemplateColumns = `repeat(${cols}, ${ts}px)`;
+  bd.style.gridTemplateRows    = `repeat(${rows}, ${ts}px)`;
+  bd.style.setProperty('--gap', g + 'px');
+  bd.innerHTML = '';
+
+  for (let idx = 0; idx < total; idx++) {
+    const div = document.createElement('div');
+    div.style.width  = ts + 'px';
+    div.style.height = ts + 'px';
+
+    const r = Math.floor(idx / cols), c = idx % cols;
+    const isGhost = (r === 0 && c !== 0);
+
+    if (isGhost) {
+      div.style.visibility    = 'hidden';
+      div.style.pointerEvents = 'none';
+      bd.appendChild(div);
+      continue;
+    }
+
+    const val = board[idx];
+    const isEmpty = (val === 0 || val === null || val === undefined);
+
+    if (isEmpty) {
+      div.style.backgroundColor = 'rgba(0,0,0,0.28)';
+      div.style.backgroundImage = 'none';
+      div.style.boxShadow       = 'inset 0 2px 10px rgba(0,0,0,0.5)';
+      div.style.borderRadius    = '9px';
+      div.style.cursor          = 'default';
+    } else {
+      // val=1〜pieces → 画像の切り出し位置
+      // ピースの正解位置: col=(val-1)%cols, row=Math.floor((val-1)/cols)
+      const pieceCol = (val - 1) % cols;
+      const pieceRow = Math.floor((val - 1) / cols);
+      const bgX = -(pieceCol * (ts + g));
+      const bgY = -(pieceRow * (ts + g));
+
+      div.style.backgroundImage    = `url('${img}')`;
+      div.style.backgroundSize     = `${imgPx}px ${imgPx}px`;
+      div.style.backgroundPosition = `${bgX}px ${bgY}px`;
+      div.style.backgroundRepeat   = 'no-repeat';
+      div.style.borderRadius       = '9px';
+      div.style.boxShadow          = '0 3px 8px rgba(0,0,0,0.42), inset 0 1px 0 rgba(255,255,255,0.18)';
+      div.style.cursor             = 'pointer';
+      div.style.transition         = 'transform 0.1s';
+
+      const num = document.createElement('span');
+      num.style.cssText = 'position:absolute;bottom:3px;right:5px;font-size:10px;font-weight:900;color:rgba(255,255,255,.6);text-shadow:0 1px 3px rgba(0,0,0,.8);pointer-events:none;';
+      num.textContent = val;
+      div.style.position = 'relative';
+      div.style.overflow = 'hidden';
+      div.appendChild(num);
+
+      div.addEventListener('click', () => handleClick(idx));
+      div.addEventListener('touchstart', e => { div.style.transform='scale(0.91)'; }, {passive:true});
+      div.addEventListener('touchend',   e => { div.style.transform=''; }, {passive:true});
+    }
+
+    bd.appendChild(div);
+  }
+}
+
+/* ================================================================
+   ストップウォッチ
+================================================================ */
+let rafId=null, timerStart=0, elapsed=0;
+function startTimer() {
+  timerStart = performance.now() - elapsed;
+  const loop = now => {
+    elapsed = now - timerStart;
+    document.getElementById('stopwatch').textContent = fmtTime(elapsed);
+    rafId = requestAnimationFrame(loop);
+  };
+  rafId = requestAnimationFrame(loop);
+}
+function stopTimer()  { cancelAnimationFrame(rafId); rafId=null; }
+function resetTimer() { stopTimer(); elapsed=0; document.getElementById('stopwatch').textContent='00:00.0'; }
+
+function fmtTime(ms) {
+  const t=Math.floor(ms/100);
+  return `${String(Math.floor(t/600)).padStart(2,'0')}:${String(Math.floor(t/10)%60).padStart(2,'0')}.${t%10}`;
+}
+
+/* ================================================================
+   ゲーム制御
+================================================================ */
+function startGame() {
+  cleared=false; moveCount=0;
+  document.getElementById('move-count').textContent='0';
+  document.getElementById('status-bar').textContent='';
+  document.getElementById('status-bar').classList.remove('cleared');
+  resetTimer(); shuffle(); calcTileSize(); renderBoard(); running=true; startTimer();
+}
+
+function enterCourse(courseId) {
+  currentCourse = COURSES[courseId];
+  const gs = document.getElementById('game-screen');
+  const gh = document.getElementById('game-header');
+  gs.className = 'screen ' + currentCourse.cls;
+  gh.className = 'game-header ' + currentCourse.cls;
+  document.getElementById('course-tag').textContent = currentCourse.label;
+  showScreen('game');
+  calcTileSize(); initSolved(); running=false; resetTimer(); renderBoard();
+  document.getElementById('status-bar').textContent='シャッフルしてスタート！';
+  document.getElementById('status-bar').classList.remove('cleared');
+}
+
+function showClearModal() {
+  document.getElementById('modal-time').textContent   = fmtTime(elapsed);
+  document.getElementById('modal-moves').textContent  = `${moveCount} 手でクリア！`;
+  document.getElementById('modal-course').textContent = currentCourse.emoji + ' ' + currentCourse.label;
+  document.getElementById('modal-overlay').classList.remove('hidden');
+  document.getElementById('status-bar').textContent   = '🎊 パズル完成！';
+  document.getElementById('status-bar').classList.add('cleared');
+  saveRecord(currentCourse.id, elapsed, moveCount);
+}
+
+/* ================================================================
+   記録
+================================================================ */
+const RKEY = 'sakusaku_v3';
+function loadAllRecords() { try { return JSON.parse(localStorage.getItem(RKEY)) || {}; } catch { return {}; } }
+function saveRecord(courseId, ms, moves) {
+  const all = loadAllRecords();
+  if (!all[courseId]) all[courseId] = [];
+  all[courseId].push({ ms, moves, date: new Date().toLocaleDateString('ja-JP') });
+  all[courseId].sort((a,b)=>a.ms-b.ms);
+  all[courseId].splice(10);
+  try { localStorage.setItem(RKEY, JSON.stringify(all)); } catch {}
+}
+
+let currentTab = 'mid';
+function switchTab(courseId) {
+  currentTab = courseId;
+  ['hard','mid','easy'].forEach(id => {
+    document.getElementById('tab-'+id).classList.toggle('active', id===courseId);
+  });
+  renderRecords();
+}
+function renderRecords() {
+  const body = document.getElementById('record-body');
+  const all  = loadAllRecords();
+  const recs = all[currentTab] || [];
+  const c    = COURSES[currentTab];
+  if (!recs.length) {
+    body.innerHTML = `<div class="record-empty">${c.emoji} ${c.label}<br>まだ記録がありません。<br>クリアして記録を残そう！</div>`;
+    return;
+  }
+  const medals = ['🥇','🥈','🥉'];
+  body.innerHTML = recs.map((r,i)=>`
+    <div class="record-item">
+      <div class="rank-badge">${medals[i]||i+1}</div>
+      <div class="record-info">
+        <div class="record-time">${fmtTime(r.ms)}</div>
+        <div class="record-meta">${r.moves} 手 ・ ${r.date}</div>
+      </div>
+    </div>`).join('');
+}
+
+/* ================================================================
+   画面遷移
+================================================================ */
+const SCREENS = {
+  title:  document.getElementById('title-screen'),
+  game:   document.getElementById('game-screen'),
+  record: document.getElementById('record-screen'),
+};
+function showScreen(n) {
+  Object.entries(SCREENS).forEach(([k,el])=>el.classList.toggle('hidden',k!==n));
+}
+
+document.getElementById('btn-hard').addEventListener('click', ()=>enterCourse('hard'));
+document.getElementById('btn-mid').addEventListener('click',  ()=>enterCourse('mid'));
+document.getElementById('btn-easy').addEventListener('click', ()=>enterCourse('easy'));
+document.getElementById('btn-to-record').addEventListener('click', ()=>{ showScreen('record'); switchTab('mid'); });
+document.getElementById('btn-shuffle').addEventListener('click', startGame);
+document.getElementById('btn-game-back').addEventListener('click', ()=>{ stopTimer(); running=false; showScreen('title'); });
+document.getElementById('btn-record-back').addEventListener('click', ()=>showScreen('title'));
+document.getElementById('modal-retry').addEventListener('click', ()=>{ document.getElementById('modal-overlay').classList.add('hidden'); startGame(); });
+document.getElementById('modal-title').addEventListener('click', ()=>{ document.getElementById('modal-overlay').classList.add('hidden'); stopTimer(); running=false; showScreen('title'); });
+window.addEventListener('resize', ()=>{ if(!SCREENS.game.classList.contains('hidden')){ calcTileSize(); renderBoard(); } });
+
+/* ================================================================
+   Service Worker
+================================================================ */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('./service-worker.js', {scope:'./'})
+      .then(r=>console.log('[SW] 登録完了:', r.scope))
+      .catch(e=>console.warn('[SW] 登録失敗:', e));
+  });
+}
+
+/* ── 初期化 ── */
+showScreen('title');
+</script>
+</body>
+</html>
