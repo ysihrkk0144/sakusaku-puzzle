@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0077B6">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="さくさくスライドパズル">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <title>さくさくスライドパズル</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --ocean-deep:  #023E8A;
+      --ocean-mid:   #0077B6;
+      --ocean-light: #00B4D8;
+      --ocean-pale:  #90E0EF;
+      --coral:       #FF6B6B;
+      --coral-dark:  #C62828;
+      --white:       #FFFFFF;
+      --text:        #E8F4FD;
+      --muted:       #90CAF9;
+      --gold:        #FFD54F;
+      --surface:     rgba(2,62,138,0.82);
+    }
+    html, body {
+      height: 100%; overflow: hidden;
+      font-family: 'Hiragino Sans','Yu Gothic UI','Meiryo',sans-serif;
+      background: var(--ocean-deep);
+      color: var(--text);
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* ── 画面管理 ── */
+    .screen {
+      position: fixed; inset: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      transition: opacity .3s, transform .3s;
+    }
+    .screen.hidden { opacity:0; pointer-events:none; transform:scale(.97) translateY(10px); }
+
+    /* ════ タイトル画面 ════ */
+    #title-screen {
+      background: radial-gradient(ellipse at 50% 15%, #0096C7 0%, transparent 55%),
+                  linear-gradient(180deg,#023E8A 0%,#012A5E 100%);
+      gap: 26px;
+    }
+    .title-waves { position:absolute; bottom:0; left:0; right:0; height:150px; overflow:hidden; pointer-events:none; }
+    .title-waves svg { position:absolute; bottom:0; width:200%; animation: waveScroll 8s linear infinite; }
+    .title-waves svg:nth-child(2){ animation-delay:-4s; opacity:.5; }
+    @keyframes waveScroll { to { transform:translateX(-50%); } }
+
+    .title-logo { text-align:center; }
+    .title-sub { font-size:11px; letter-spacing:.35em; color:var(--ocean-pale); margin-bottom:6px; }
+    .title-main {
+      font-size: clamp(22px,7vw,36px); font-weight:900; letter-spacing:.06em;
+      background: linear-gradient(135deg,#fff 20%,var(--ocean-pale) 60%,var(--gold) 100%);
+      -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;
+    }
+    .title-deco { width:52px; height:3px; background:linear-gradient(90deg,var(--ocean-light),var(--gold)); margin:10px auto 0; border-radius:2px; }
+
+    .title-btns { display:flex; flex-direction:column; gap:13px; width:min(250px,80vw); }
+    .btn {
+      border:none; border-radius:13px; font-family:inherit;
+      font-size:16px; font-weight:700; letter-spacing:.08em;
+      cursor:pointer; transition:transform .12s, opacity .12s;
+      width:100%; padding:14px 0;
+      display:flex; align-items:center; justify-content:center; gap:7px;
+    }
+    .btn:active { transform:scale(.95); opacity:.85; }
+    .btn-primary { background:linear-gradient(135deg,var(--coral),var(--coral-dark)); color:#fff; box-shadow:0 6px 20px rgba(198,40,40,.4); }
+    .btn-secondary { background:var(--surface); color:var(--text); border:1px solid rgba(255,255,255,.12); backdrop-filter:blur(8px); }
+    .btn-sm { font-size:13px; padding:9px 18px; width:auto; border-radius:8px; }
+
+    /* ════ ゲーム画面 ════ */
+    #game-screen {
+      background: linear-gradient(180deg,#012A5E 0%,#023E8A 50%,#01579B 100%);
+      justify-content: flex-start; padding:0;
+    }
+    .game-header {
+      width:100%; background:rgba(1,42,94,.92); backdrop-filter:blur(10px);
+      border-bottom:1px solid rgba(255,255,255,.08);
+      padding:10px 14px 8px;
+      display:flex; align-items:center; gap:12px; flex-shrink:0;
+    }
+    .header-info { flex:1; }
+    .header-label { font-size:10px; color:var(--muted); letter-spacing:.2em; text-transform:uppercase; margin-bottom:1px; }
+    .stopwatch { font-size:28px; font-weight:900; font-variant-numeric:tabular-nums; color:var(--gold); line-height:1; }
+    .moves-label { font-size:11px; color:var(--muted); margin-top:2px; }
+    .moves-label strong { color:var(--white); font-size:14px; }
+    .btn-shuffle {
+      background:linear-gradient(135deg,var(--coral),var(--coral-dark));
+      color:#fff; border:none; border-radius:10px; font-family:inherit;
+      font-size:14px; font-weight:700; padding:10px 14px;
+      cursor:pointer; transition:transform .12s; white-space:nowrap; flex-shrink:0;
+    }
+    .btn-shuffle:active { transform:scale(.93); }
+
+    .puzzle-area {
+      flex:1; display:flex; flex-direction:column;
+      align-items:center; justify-content:center;
+      gap:10px; padding:10px; width:100%; overflow:hidden;
+    }
+    .status-bar { font-size:13px; color:var(--muted); letter-spacing:.06em; height:18px; text-align:center; flex-shrink:0; }
+    .status-bar.cleared { color:var(--gold); font-weight:700; font-size:14px; }
+
+    /* ─────────────────────────────────────────
+       パズル盤面
+       グリッド構造: 5行 × 4列 = 20セル
+         row0: [A1=有効] [B1=ghost] [C1=ghost] [D1=ghost]
+         row1〜4: A2〜D5 すべて有効 (16ピース)
+
+       タイルサイズ・gapはJSからCSS変数で注入
+    ───────────────────────────────────────── */
+    .puzzle-board {
+      display: grid;
+      grid-template-columns: repeat(4, var(--ts));
+      grid-template-rows: repeat(5, var(--ts));
+      gap: var(--gap);
+      flex-shrink: 0;
+    }
+
+    /* 有効タイル共通 */
+    .tile {
+      width: var(--ts); height: var(--ts);
+      border-radius: 10px;
+      cursor: pointer;
+      position: relative; overflow: hidden;
+      transition: transform .1s;
+      box-shadow: 0 3px 8px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.18);
+      user-select: none;
+      /* 背景画像はJSでインラインスタイルとして全プロパティ設定 */
+    }
+    .tile:active { transform:scale(.90); }
+
+    /* 空白スロット */
+    .tile.empty {
+      background-color: rgba(0,0,0,.30) !important;
+      background-image: none !important;
+      box-shadow: inset 0 2px 10px rgba(0,0,0,.55);
+      cursor: default;
+    }
+    .tile.empty:active { transform:none; }
+
+    /* ghost (B1/C1/D1): レイアウト維持のみ、見えない */
+    .tile.ghost {
+      visibility: hidden;
+      pointer-events: none;
+      box-shadow: none;
+      background: transparent !important;
+    }
+
+    /* 番号補助表示 */
+    .tile-num {
+      position:absolute; bottom:3px; right:5px;
+      font-size:11px; font-weight:900;
+      color:rgba(255,255,255,.60);
+      text-shadow:0 1px 3px rgba(0,0,0,.8);
+      pointer-events:none; line-height:1;
+    }
+
+    .game-footer { display:flex; gap:10px; flex-shrink:0; }
+
+    /* ════ 記録画面 ════ */
+    #record-screen {
+      background:linear-gradient(180deg,#012A5E 0%,#023E8A 100%);
+      justify-content:flex-start; padding:0;
+    }
+    .record-header {
+      width:100%; background:rgba(1,42,94,.92); backdrop-filter:blur(10px);
+      border-bottom:1px solid rgba(255,255,255,.08);
+      padding:14px 18px; display:flex; align-items:center; justify-content:space-between; flex-shrink:0;
+    }
+    .record-header h2 { font-size:18px; font-weight:900; }
+    .record-body { flex:1; overflow-y:auto; width:100%; padding:12px; display:flex; flex-direction:column; gap:10px; }
+    .record-item {
+      background:var(--surface); backdrop-filter:blur(8px);
+      border:1px solid rgba(255,255,255,.08); border-radius:13px;
+      padding:12px 16px; display:flex; align-items:center; gap:12px;
+    }
+    .rank-badge { font-size:22px; width:28px; text-align:center; flex-shrink:0; }
+    .record-info { flex:1; }
+    .record-time { font-size:22px; font-weight:900; color:var(--gold); font-variant-numeric:tabular-nums; line-height:1; }
+    .record-meta { font-size:12px; color:var(--muted); margin-top:3px; }
+    .record-empty { text-align:center; color:var(--muted); font-size:14px; padding:60px 0; line-height:2.2; }
+
+    /* ════ クリアモーダル ════ */
+    .modal-overlay {
+      position:fixed; inset:0; background:rgba(0,20,60,.78);
+      display:flex; align-items:center; justify-content:center;
+      z-index:200; backdrop-filter:blur(6px); transition:opacity .3s;
+    }
+    .modal-overlay.hidden { opacity:0; pointer-events:none; }
+    .modal {
+      background:linear-gradient(160deg,#0077B6,#012A5E);
+      border:1px solid rgba(255,255,255,.12); border-radius:22px;
+      padding:34px 28px 28px; text-align:center;
+      width:min(88vw,308px); box-shadow:0 24px 64px rgba(0,0,0,.6);
+    }
+    .modal-emoji { font-size:50px; display:block; margin-bottom:8px; }
+    .modal h2 { font-size:24px; font-weight:900; color:var(--gold); margin-bottom:4px; }
+    .modal-time { font-size:38px; font-weight:900; font-variant-numeric:tabular-nums; color:#fff; margin:10px 0 4px; }
+    .modal-moves { font-size:14px; color:var(--muted); margin-bottom:24px; }
+    .modal-btns { display:flex; gap:11px; }
+    .modal-btns .btn { flex:1; padding:12px 0; }
+
+    @media (prefers-reduced-motion:reduce) {
+      .tile,.screen,.modal-overlay,.title-waves svg { transition:none!important; animation:none!important; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ══ タイトル画面 ══ -->
+<div id="title-screen" class="screen">
+  <div class="title-waves" aria-hidden="true">
+    <svg viewBox="0 0 1200 120" preserveAspectRatio="none" height="120">
+      <path d="M0,60 Q150,20 300,60 Q450,100 600,60 Q750,20 900,60 Q1050,100 1200,60 L1200,120 L0,120 Z" fill="rgba(0,180,216,.18)"/>
+    </svg>
+    <svg viewBox="0 0 1200 120" preserveAspectRatio="none" height="120">
+      <path d="M0,80 Q150,40 300,80 Q450,120 600,80 Q750,40 900,80 Q1050,120 1200,80 L1200,120 L0,120 Z" fill="rgba(0,180,216,.10)"/>
+    </svg>
+  </div>
+  <div class="title-logo">
+    <p class="title-sub">✦ Slide Puzzle ✦</p>
+    <h1 class="title-main">さくさくスライドパズル</h1>
+    <div class="title-deco"></div>
+  </div>
+  <div class="title-btns">
+    <button class="btn btn-primary"   id="btn-to-game">🎮 スタート</button>
+    <button class="btn btn-secondary" id="btn-to-record">🏆 記録</button>
+  </div>
+</div>
+
+<!-- ══ ゲーム画面 ══ -->
+<div id="game-screen" class="screen hidden">
+  <div class="game-header">
+    <div class="header-info">
+      <div class="header-label">TIME</div>
+      <div class="stopwatch" id="stopwatch">00:00.0</div>
+      <div class="moves-label">手数 <strong id="move-count">0</strong></div>
+    </div>
+    <button class="btn-shuffle" id="btn-shuffle">🔀 シャッフル</button>
+  </div>
+  <div class="puzzle-area">
+    <div class="status-bar" id="status-bar">シャッフルしてスタート！</div>
+    <div class="puzzle-board" id="puzzle-board"></div>
+    <div class="game-footer">
+      <button class="btn btn-secondary btn-sm" id="btn-game-back">← タイトル</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 記録画面 ══ -->
+<div id="record-screen" class="screen hidden">
+  <div class="record-header">
+    <h2>🏆 ベスト記録</h2>
+    <button class="btn btn-secondary btn-sm" id="btn-record-back">← 戻る</button>
+  </div>
+  <div class="record-body" id="record-body"></div>
+</div>
+
+<!-- ══ クリアモーダル ══ -->
+<div class="modal-overlay hidden" id="modal-overlay">
+  <div class="modal">
+    <span class="modal-emoji">🎉</span>
+    <h2>クリア！</h2>
+    <div class="modal-time"  id="modal-time">--:--.-</div>
+    <div class="modal-moves" id="modal-moves"></div>
+    <div class="modal-btns">
+      <button class="btn btn-secondary" id="modal-retry">もう一度</button>
+      <button class="btn btn-primary"   id="modal-title">タイトル</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ================================================================
+   盤面定義
+   ─────────────────────────────────────────────────────────────
+   グリッド: 5行 × 4列 = インデックス 0〜19
+     row0: idx 0,1,2,3  → 有効=0のみ (A1)、1〜3はghost
+     row1: idx 4,5,6,7  → A2〜D2 すべて有効
+     row2: idx 8〜11    → A3〜D3
+     row3: idx 12〜15   → A4〜D4
+     row4: idx 16〜19   → A5〜D5
+
+   有効セル17個: [0, 4,5,6,7, 8,9,10,11, 12,13,14,15, 16,17,18,19]
+   ピース16個(値1〜16) + 空白1個(値0)
+
+   解答状態:
+     idx=0  → 値0 (空白)
+     idx=4  → 値1, idx=5 → 値2, ..., idx=19 → 値16
+================================================================ */
+const COLS  = 4;
+const ROWS  = 5;
+const TOTAL = COLS * ROWS; // 20
+
+function isValid(idx) {
+  const r = Math.floor(idx / COLS);
+  const c = idx % COLS;
+  if (r === 0) return c === 0;   // row0はA列のみ
+  return true;                   // row1〜4はすべて有効
+}
+
+const VALID = [...Array(TOTAL).keys()].filter(isValid);
+// VALID = [0, 4,5,6,7, 8,9,10,11, 12,13,14,15, 16,17,18,19]
+const PIECE_COUNT = VALID.length - 1; // 16
+
+function neighbors(idx) {
+  const r = Math.floor(idx / COLS), c = idx % COLS;
+  return [
+    r > 0        ? idx - COLS : -1,
+    r < ROWS - 1 ? idx + COLS : -1,
+    c > 0        ? idx - 1    : -1,
+    c < COLS - 1 ? idx + 1    : -1,
+  ].filter(n => n >= 0 && isValid(n));
+}
+
+/* ── パズル状態 ── */
+let board    = Array(TOTAL).fill(null);
+let emptyIdx = 0;
+let moveCount = 0, running = false, cleared = false;
+
+function initSolved() {
+  board    = Array(TOTAL).fill(null);
+  board[VALID[0]] = 0;          // A1 = 空白
+  emptyIdx = VALID[0];          // = 0
+  for (let i = 1; i <= PIECE_COUNT; i++) board[VALID[i]] = i;
+}
+
+function shuffle() {
+  initSolved();
+  let prev = -1;
+  for (let i = 0; i < 600; i++) {
+    const ns   = neighbors(emptyIdx).filter(n => n !== prev);
+    const pick = ns[Math.floor(Math.random() * ns.length)];
+    prev = emptyIdx;
+    board[emptyIdx] = board[pick]; board[pick] = 0; emptyIdx = pick;
+  }
+}
+
+function handleClick(idx) {
+  if (!running || cleared) return;
+  if (!neighbors(emptyIdx).includes(idx)) return;
+  board[emptyIdx] = board[idx]; board[idx] = 0; emptyIdx = idx;
+  moveCount++;
+  document.getElementById('move-count').textContent = moveCount;
+  renderBoard();
+  if (isSolved()) { cleared = true; stopTimer(); setTimeout(showClearModal, 350); }
+}
+
+function isSolved() {
+  return VALID.every((ci, i) => board[ci] === (i === 0 ? 0 : i));
+}
+
+/* ================================================================
+   タイルサイズ計算
+   ─────────────────────────────────────────────────────────────
+   盤面は 4列 × 5行。
+   ただし row0 は A列1マスしか表示されない(B1〜D1はghost)ため、
+   幅方向の制約は「4列に収まるサイズ」、
+   高さ方向の制約は「5行 + gap に収まるサイズ」で計算する。
+   スマホで大きく見せるため余白を極力削る。
+================================================================ */
+const IMG_SRC = 'puzzle-image.svg';
+const GAP = 4;   // px (タイル間隔)
+
+let tileSize = 64;
+
+function calcTileSize() {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  // ヘッダー高さ (実測近似)
+  const headerH = 76;
+  // ゲームフッター + status-bar + 各種余白
+  const otherH  = 18 + 44 + 20;  // status + footer-btn + gap
+  const padW    = 16;  // 左右合計
+  const padH    = 16;  // 上下合計
+  const availW  = vw - padW  - GAP * (COLS - 1);
+  const availH  = vh - headerH - otherH - padH - GAP * (ROWS - 1);
+  const byW = Math.floor(availW / COLS);
+  const byH = Math.floor(availH / ROWS);
+  tileSize = Math.max(48, Math.min(byW, byH, 110));
+}
+
+/* ================================================================
+   盤面描画
+   ─────────────────────────────────────────────────────────────
+   【画像分割の正しい計算】
+   puzzle-image.svg は 512×512 の正方形。
+   これを 4列×4行 の16枚に分割する。
+   タイルサイズ = T px, gap = G px のとき:
+     backgroundSize = (4T + 3G) × (4T + 3G)
+       → SVGをこのサイズに縮小表示する
+     ピース(col,row)の backgroundPosition:
+       x = -(col * (T + G))
+       y = -(row * (T + G))
+   ※ backgroundSize と backgroundPosition を
+      必ずインラインスタイルで同時に設定する。
+      CSS変数経由では描画タイミングのズレで
+      backgroundSize が未適用のまま表示されることがある。
+================================================================ */
+function renderBoard() {
+  const bd  = document.getElementById('puzzle-board');
+  const ts  = tileSize;
+  const g   = GAP;
+  const imgPx = ts * 4 + g * 3; // 4タイル分の総幅=高さ
+
+  // CSS変数(グリッドサイズ用)
+  bd.style.setProperty('--ts',  ts + 'px');
+  bd.style.setProperty('--gap', g  + 'px');
+
+  bd.innerHTML = '';
+
+  for (let idx = 0; idx < TOTAL; idx++) {
+    const div = document.createElement('div');
+
+    if (!isValid(idx)) {
+      div.className = 'tile ghost';
+      bd.appendChild(div);
+      continue;
+    }
+
+    const val = board[idx];
+
+    if (val === 0) {
+      // 空白スロット
+      div.className = 'tile empty';
+    } else {
+      // 画像ピース val=1〜16
+      div.className = 'tile';
+
+      // val=1→(col=0,row=0), val=4→(col=3,row=0), val=5→(col=0,row=1) ...
+      const pieceCol = (val - 1) % 4;
+      const pieceRow = Math.floor((val - 1) / 4);
+      const bgX = -(pieceCol * (ts + g));
+      const bgY = -(pieceRow * (ts + g));
+
+      // ★ backgroundSize と backgroundPosition を同時にインラインで設定
+      div.style.backgroundImage    = `url('${IMG_SRC}')`;
+      div.style.backgroundSize     = `${imgPx}px ${imgPx}px`;
+      div.style.backgroundPosition = `${bgX}px ${bgY}px`;
+      div.style.backgroundRepeat   = 'no-repeat';
+
+      // 番号補助
+      const num = document.createElement('span');
+      num.className   = 'tile-num';
+      num.textContent = val;
+      div.appendChild(num);
+
+      div.addEventListener('click', () => handleClick(idx));
+    }
+
+    bd.appendChild(div);
+  }
+}
+
+/* ================================================================
+   ストップウォッチ
+================================================================ */
+let rafId = null, timerStart = 0, elapsed = 0;
+
+function startTimer() {
+  timerStart = performance.now() - elapsed;
+  const loop = now => {
+    elapsed = now - timerStart;
+    document.getElementById('stopwatch').textContent = fmtTime(elapsed);
+    rafId = requestAnimationFrame(loop);
+  };
+  rafId = requestAnimationFrame(loop);
+}
+function stopTimer()  { cancelAnimationFrame(rafId); rafId = null; }
+function resetTimer() { stopTimer(); elapsed = 0; document.getElementById('stopwatch').textContent = '00:00.0'; }
+
+function fmtTime(ms) {
+  const t = Math.floor(ms / 100);
+  return `${String(Math.floor(t/600)).padStart(2,'0')}:${String(Math.floor(t/10)%60).padStart(2,'0')}.${t%10}`;
+}
+
+/* ================================================================
+   ゲーム開始 / クリア / 記録
+================================================================ */
+function startGame() {
+  cleared = false; moveCount = 0;
+  document.getElementById('move-count').textContent = '0';
+  document.getElementById('status-bar').textContent = '';
+  document.getElementById('status-bar').classList.remove('cleared');
+  resetTimer(); shuffle(); calcTileSize(); renderBoard(); running = true; startTimer();
+}
+
+function showClearModal() {
+  document.getElementById('modal-time').textContent  = fmtTime(elapsed);
+  document.getElementById('modal-moves').textContent = `${moveCount} 手でクリア！🐟`;
+  document.getElementById('modal-overlay').classList.remove('hidden');
+  document.getElementById('status-bar').textContent = '🎊 パズル完成！';
+  document.getElementById('status-bar').classList.add('cleared');
+  saveRecord(elapsed, moveCount);
+}
+
+const RKEY = 'sakusaku_v2';
+function loadRecords() { try { return JSON.parse(localStorage.getItem(RKEY))||[]; } catch { return []; } }
+function saveRecord(ms, moves) {
+  const r = loadRecords();
+  r.push({ ms, moves, date: new Date().toLocaleDateString('ja-JP') });
+  r.sort((a,b)=>a.ms-b.ms); r.splice(10);
+  try { localStorage.setItem(RKEY, JSON.stringify(r)); } catch {}
+}
+function renderRecords() {
+  const body = document.getElementById('record-body');
+  const recs = loadRecords();
+  if (!recs.length) { body.innerHTML='<div class="record-empty">まだ記録がありません。<br>🐟 クリアして記録を残そう！</div>'; return; }
+  const medals=['🥇','🥈','🥉'];
+  body.innerHTML = recs.map((r,i)=>`
+    <div class="record-item">
+      <div class="rank-badge">${medals[i]||i+1}</div>
+      <div class="record-info">
+        <div class="record-time">${fmtTime(r.ms)}</div>
+        <div class="record-meta">${r.moves} 手 ・ ${r.date}</div>
+      </div>
+    </div>`).join('');
+}
+
+/* ================================================================
+   画面遷移 & イベント
+================================================================ */
+const SCREENS = {
+  title:  document.getElementById('title-screen'),
+  game:   document.getElementById('game-screen'),
+  record: document.getElementById('record-screen'),
+};
+function showScreen(n) {
+  Object.entries(SCREENS).forEach(([k,el])=>el.classList.toggle('hidden',k!==n));
+}
+
+document.getElementById('btn-to-game').addEventListener('click', () => {
+  showScreen('game'); calcTileSize(); initSolved(); running=false; resetTimer(); renderBoard();
+  document.getElementById('status-bar').textContent='シャッフルしてスタート！';
+  document.getElementById('status-bar').classList.remove('cleared');
+});
+document.getElementById('btn-to-record').addEventListener('click',()=>{ showScreen('record'); renderRecords(); });
+document.getElementById('btn-shuffle').addEventListener('click', startGame);
+document.getElementById('btn-game-back').addEventListener('click',()=>{ stopTimer(); running=false; showScreen('title'); });
+document.getElementById('btn-record-back').addEventListener('click',()=>showScreen('title'));
+document.getElementById('modal-retry').addEventListener('click',()=>{ document.getElementById('modal-overlay').classList.add('hidden'); startGame(); });
+document.getElementById('modal-title').addEventListener('click',()=>{ document.getElementById('modal-overlay').classList.add('hidden'); stopTimer(); running=false; showScreen('title'); });
+window.addEventListener('resize',()=>{ if(!SCREENS.game.classList.contains('hidden')){ calcTileSize(); renderBoard(); } });
+
+/* ================================================================
+   Service Worker (外部ファイル)
+================================================================ */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./service-worker.js', { scope: './' })
+      .then(r => console.log('[SW] 登録完了:', r.scope))
+      .catch(e => console.warn('[SW] 登録失敗:', e));
+  });
+}
+
+/* ── 初期化 ── */
+calcTileSize();
+showScreen('title');
+</script>
+</body>
+</html>

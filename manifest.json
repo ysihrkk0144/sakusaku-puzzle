@@ -1,0 +1,25 @@
+{
+  "name": "さくさくスライドパズル",
+  "short_name": "スライドパズル",
+  "description": "海と魚のかわいいスライドパズルゲーム",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0077B6",
+  "theme_color": "#0077B6",
+  "lang": "ja",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
