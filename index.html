@@ -327,20 +327,30 @@ let emptyIdx = 0;
 let moveCount = 0, running = false, cleared = false;
 
 function initSolved() {
-  board    = Array(TOTAL).fill(null);
-  board[VALID[0]] = 0;          // A1 = 空白
-  emptyIdx = VALID[0];          // = 0
-  for (let i = 1; i <= PIECE_COUNT; i++) board[VALID[i]] = i;
+  // 全セルをnullで初期化（ghostセルはnullのまま）
+  board = Array(TOTAL).fill(null);
+  // A1(idx=0) = 空白
+  board[VALID[0]] = 0;
+  emptyIdx = VALID[0]; // 0
+  // A2〜D5(idx=4〜19) = ピース1〜16
+  for (let i = 1; i <= PIECE_COUNT; i++) {
+    board[VALID[i]] = i;
+  }
 }
 
 function shuffle() {
   initSolved();
   let prev = -1;
-  for (let i = 0; i < 600; i++) {
-    const ns   = neighbors(emptyIdx).filter(n => n !== prev);
+  for (let i = 0; i < 800; i++) {
+    const ns = neighbors(emptyIdx).filter(n => n !== prev);
+    if (ns.length === 0) continue;
     const pick = ns[Math.floor(Math.random() * ns.length)];
-    prev = emptyIdx;
-    board[emptyIdx] = board[pick]; board[pick] = 0; emptyIdx = pick;
+    // 安全チェック: pickのboard値がnullなら(ghostセル)スキップ
+    if (board[pick] === null || board[pick] === undefined) continue;
+    prev       = emptyIdx;
+    board[emptyIdx] = board[pick];
+    board[pick]     = 0;
+    emptyIdx        = pick;
   }
 }
 
@@ -428,7 +438,8 @@ function renderBoard() {
 
     const val = board[idx];
 
-    if (val === 0) {
+    // null・undefined・0 すべて空白スロットとして扱う
+    if (val === 0 || val === null || val === undefined) {
       // 空白スロット
       div.className = 'tile empty';
     } else {
