@@ -207,6 +207,42 @@
     .modal-btns { display:flex; gap:10px; }
     .modal-btns .btn { flex:1; padding:11px 0; }
 
+
+    /* ════ キャッシュ完了バナー ════ */
+    #cache-banner {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 999;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      background: linear-gradient(135deg, #2E7D32, #1B5E20);
+      color: white;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+      transform: translateY(-100%);
+      transition: transform 0.4s ease;
+      pointer-events: none;
+    }
+    #cache-banner.show {
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+    #cache-banner.error {
+      background: linear-gradient(135deg, #E65100, #BF360C);
+    }
+    #cache-banner-close {
+      background: none;
+      border: none;
+      color: white;
+      font-size: 18px;
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+    }
     @media (prefers-reduced-motion:reduce) {
       .puzzle-board div,.screen,.modal-overlay,.title-waves svg { transition:none!important; animation:none!important; }
     }
@@ -296,6 +332,13 @@
       <button class="btn btn-primary"   id="modal-title">タイトル</button>
     </div>
   </div>
+</div>
+
+
+<!-- ══ キャッシュ完了バナー ══ -->
+<div id="cache-banner">
+  <span id="cache-banner-msg">📦 オフライン用データを保存中...</span>
+  <button id="cache-banner-close" onclick="document.getElementById('cache-banner').classList.remove('show')">✕</button>
 </div>
 
 <script>
@@ -598,11 +641,40 @@ window.addEventListener('resize', ()=>{ if(!SCREENS.game.classList.contains('hid
    Service Worker
 ================================================================ */
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', ()=>{
-    navigator.serviceWorker.register('./service-worker.js', {scope:'./'})
-      .then(r=>console.log('[SW] 登録完了:', r.scope))
-      .catch(e=>console.warn('[SW] 登録失敗:', e));
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./service-worker.js', { scope: './' })
+      .then(reg => {
+        console.log('[SW] 登録完了:', reg.scope);
+      })
+      .catch(e => {
+        console.warn('[SW] 登録失敗:', e);
+        // 登録失敗バナー
+        showCacheBanner('❌ オフライン準備に失敗しました', true);
+      });
+
+    // SW からのメッセージ受信（キャッシュ完了通知）
+    navigator.serviceWorker.addEventListener('message', event => {
+      if (event.data?.type === 'CACHE_DONE') {
+        const { succeeded, failed, total } = event.data;
+        if (failed === 0) {
+          showCacheBanner(`✅ オフライン準備完了！ (${succeeded}/${total}件)`);
+        } else {
+          showCacheBanner(`⚠️ 一部未保存 (${succeeded}/${total}件成功、${failed}件失敗)`, true);
+        }
+      }
+    });
   });
+}
+
+function showCacheBanner(msg, isError = false) {
+  const banner = document.getElementById('cache-banner');
+  const msgEl  = document.getElementById('cache-banner-msg');
+  if (!banner || !msgEl) return;
+  msgEl.textContent = msg;
+  banner.classList.toggle('error', isError);
+  banner.classList.add('show');
+  // 4秒後に自動非表示
+  setTimeout(() => banner.classList.remove('show'), 4000);
 }
 
 /* ── 初期化 ── */
