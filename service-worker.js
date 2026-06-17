@@ -1,14 +1,16 @@
 /* ============================================================
    service-worker.js — さくさくスライドパズル
-   バージョン: v8
+   バージョン: v9
    変更点:
      - Promise.allSettled で個別キャッシュ（1ファイル失敗で全滅しない）
      - service-worker.js 自体はキャッシュリストから除外
      - GETリクエスト以外はスルー
      - キャッシュ完了をクライアントにメッセージ通知
+     - ナビゲーションリクエストを最優先でキャッシュから返す
+       （SW休止直後の機内モード起動でERR_FAILEDになる問題への対策）
 ============================================================ */
 
-const CACHE_NAME = 'sakusaku-puzzle-v8';
+const CACHE_NAME = 'sakusaku-puzzle-v9';
 
 // ★ service-worker.js 自体はリストに含めない
 const ASSETS = [
@@ -67,11 +69,27 @@ self.addEventListener('activate', event => {
   );
 });
 
-/* ---------- フェッチ（Cache First） ---------- */
+/* ---------- フェッチ（Cache First + ナビゲーション優先処理） ---------- */
 self.addEventListener('fetch', event => {
   // ★ GETリクエスト以外・http以外はスルー
   if (event.request.method !== 'GET') return;
   if (!event.request.url.startsWith('http')) return;
+
+  // ★ ナビゲーションリクエスト（ページ読み込み自体）を最優先処理
+  // SWが一時的に非アクティブだった直後でも、機内モード時に
+  // ブラウザ標準のERR_FAILED画面が出る前にキャッシュのindex.htmlを返す
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      caches.match('./index.html').then(cached => {
+        if (cached) return cached;
+        // キャッシュがなければ通常のネットワーク取得にフォールバック
+        return fetch(event.request).catch(() =>
+          caches.match('./index.html')
+        );
+      })
+    );
+    return;
+  }
 
   event.respondWith(
     caches.match(event.request).then(cached => {
