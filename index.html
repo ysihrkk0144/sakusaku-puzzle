@@ -244,6 +244,37 @@
       line-height: 1;
     }
 
+    /* ════ 更新通知バナー ════ */
+    #update-banner {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      z-index: 997;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 16px;
+      background: linear-gradient(135deg, #0288D1, #01579B);
+      color: white;
+      font-size: 13px;
+      font-weight: 700;
+      box-shadow: 0 -2px 12px rgba(0,0,0,0.4);
+      transform: translateY(100%);
+      transition: transform 0.4s ease;
+    }
+    #update-banner.show { transform: translateY(0); }
+    .update-banner-btns { display: flex; gap: 8px; flex-shrink: 0; }
+    .update-btn-apply {
+      background: white; color: #01579B; border: none;
+      border-radius: 8px; padding: 7px 14px; font-size: 12px;
+      font-weight: 900; cursor: pointer; font-family: inherit;
+    }
+    .update-btn-dismiss {
+      background: rgba(255,255,255,0.2); color: white; border: none;
+      border-radius: 8px; padding: 7px 14px; font-size: 12px;
+      font-weight: 700; cursor: pointer; font-family: inherit;
+    }
+
     /* ════ 診断パネル ════ */
     #diag-toggle-btn {
       position: fixed;
@@ -307,6 +338,12 @@
     }
     .diag-refresh {
       background: linear-gradient(135deg,#0077B6,#023E8A);
+      color: white; border: none; border-radius: 8px;
+      padding: 10px; font-size: 13px; font-weight: 700;
+      cursor: pointer; font-family: 'Hiragino Sans', sans-serif;
+    }
+    .diag-update-check {
+      background: linear-gradient(135deg,#2E7D32,#1B5E20);
       color: white; border: none; border-radius: 8px;
       padding: 10px; font-size: 13px; font-weight: 700;
       cursor: pointer; font-family: 'Hiragino Sans', sans-serif;
@@ -410,6 +447,15 @@
   <button id="cache-banner-close" onclick="document.getElementById('cache-banner').classList.remove('show')">✕</button>
 </div>
 
+<!-- ══ 更新が見つかったときのバナー ══ -->
+<div id="update-banner">
+  <span>🆕 新しいバージョンがあります</span>
+  <div class="update-banner-btns">
+    <button class="update-btn-apply" onclick="applyUpdate()">更新する</button>
+    <button class="update-btn-dismiss" onclick="dismissUpdate()">あとで</button>
+  </div>
+</div>
+
 <!-- ══ 診断パネル開閉ボタン ══ -->
 <button id="diag-toggle-btn" onclick="toggleDiagnosticPanel()">🔧 診断</button>
 
@@ -428,6 +474,7 @@
     <pre id="diag-cache">(まだ取得していません)</pre>
   </div>
   <button class="diag-refresh" onclick="updateDiagnosticPanel()">🔄 再取得</button>
+  <button class="diag-update-check" onclick="checkForUpdate()">🌐 最新版を確認（オンライン時のみ）</button>
 </div>
 
 <script>
@@ -727,14 +774,18 @@ document.getElementById('modal-title').addEventListener('click', ()=>{ document.
 window.addEventListener('resize', ()=>{ if(!SCREENS.game.classList.contains('hidden')){ calcTileSize(); renderBoard(); } });
 
 /* ================================================================
-   Service Worker + 診断パネル
+   Service Worker + 診断パネル + 手動更新方式
+   ─────────────────────────────────────────────────────────────
+   方針:
+   ・通常起動時は自動更新チェックを行わない（完全オフライン優先）
+   ・「最新版を確認」ボタンを押した時だけ reg.update() を呼ぶ
+   ・新バージョンが見つかったら確認ダイアログを出し、
+     同意を得てから skipWaiting → リロードする
 ================================================================ */
 let swRegistration = null;
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    // ★ updateViaCache: "none" — ブラウザのHTTPキャッシュを経由せず
-    //   service-worker.js 自体を常に最新版で取得・比較させる
     navigator.serviceWorker.register('./service-worker.js', {
       scope: './',
       updateViaCache: 'none',
@@ -743,6 +794,23 @@ if ('serviceWorker' in navigator) {
         swRegistration = reg;
         console.log('[SW] 登録完了:', reg.scope);
         updateDiagnosticPanel();
+
+        // すでにwaiting中の新SWがある場合（前回チェック済みで未適用）
+        if (reg.waiting) {
+          showUpdateBanner();
+        }
+
+        // 新しいSWが見つかった瞬間の検知（手動update()呼び出し時に発火）
+        reg.addEventListener('updatefound', () => {
+          const newWorker = reg.installing;
+          if (!newWorker) return;
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              // 新バージョンのインストールが完了し、適用待ち状態になった
+              showUpdateBanner();
+            }
+          });
+        });
       })
       .catch(e => {
         console.warn('[SW] 登録失敗:', e);
@@ -750,7 +818,6 @@ if ('serviceWorker' in navigator) {
         updateDiagnosticPanel();
       });
 
-    // SW からのメッセージ受信
     navigator.serviceWorker.addEventListener('message', event => {
       const data = event.data || {};
 
@@ -774,12 +841,57 @@ if ('serviceWorker' in navigator) {
       }
     });
 
-    // controllerの変化も監視（古いSW→新SW切替の検知）
+    // 新SWが有効化されてcontrollerが切り替わったらリロードする
+    // （「更新する」を押した直後のみ発生する）
+    let reloading = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       console.log('[SW] controller changed');
+      if (reloading) return;
+      if (window.__userRequestedUpdate) {
+        reloading = true;
+        window.location.reload();
+      }
       updateDiagnosticPanel();
     });
   });
+}
+
+/* ── 手動更新チェック（ボタンから呼ばれる） ── */
+function checkForUpdate() {
+  if (!swRegistration) {
+    showCacheBanner('⚠️ SW未登録のため更新確認できません', true);
+    return;
+  }
+  showCacheBanner('🔍 最新版を確認中...');
+  swRegistration.update()
+    .then(() => {
+      // updatefoundが発火しなければ「最新版です」
+      setTimeout(() => {
+        if (!swRegistration.waiting && !swRegistration.installing) {
+          showCacheBanner('✅ 既に最新版です');
+        }
+      }, 1500);
+    })
+    .catch(e => {
+      console.warn('[更新確認] 失敗:', e);
+      showCacheBanner('❌ 更新確認に失敗しました（オフライン中？）', true);
+    });
+}
+
+/* ── 更新通知バナー（適用するか選べる） ── */
+function showUpdateBanner() {
+  const banner = document.getElementById('update-banner');
+  if (banner) banner.classList.add('show');
+}
+function applyUpdate() {
+  if (!swRegistration?.waiting) return;
+  window.__userRequestedUpdate = true;
+  swRegistration.waiting.postMessage({ type: 'SKIP_WAITING' });
+  document.getElementById('update-banner').classList.remove('show');
+  showCacheBanner('🔄 更新を適用しています...');
+}
+function dismissUpdate() {
+  document.getElementById('update-banner').classList.remove('show');
 }
 
 function showCacheBanner(msg, isError = false) {

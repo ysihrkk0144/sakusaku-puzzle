@@ -1,22 +1,18 @@
 /* ============================================================
    service-worker.js — さくさくスライドパズル
-   バージョン: v10
-   変更点（今回の修正）:
-     - キャッシュキーを new URL(path, self.location).href で完全URL化
-     - fetch: navigation リクエストはキャッシュ最優先（network-first しない）
-     - Promise.allSettled で個別キャッシュ（1ファイル失敗で全滅しない）
-     - service-worker.js 自体はASSETSに含めない
-     - GET以外・http以外はスルー
-     - 診断用: 現在のキャッシュ内容をpostMessageで返すハンドラを追加
+   バージョン: v12
+   方針転換: 完全オフライン優先 + 手動更新方式
+   ─────────────────────────────────────────────────────────
+   ・通常時はネットワークに一切問い合わせない（Cache Only）
+   ・更新は「更新確認」ボタンを押した時だけ実行する
+   ・これにより「裏で勝手に動く自動更新」と
+     「機内モードのタイミング」が衝突する問題を根本的に回避する
 ============================================================ */
 
-const SW_VERSION = 'v10';
+const SW_VERSION = 'v12';
 const CACHE_NAME = `sakusaku-puzzle-${SW_VERSION}`;
 
-// ★ service-worker.js 自体はリストに含めない
-// ★ 相対パスで記述し、使用時に completeURL() で完全URL化する
 const ASSET_PATHS = [
-  './',
   './index.html',
   './manifest.json',
   './icon-192.png',
@@ -26,7 +22,6 @@ const ASSET_PATHS = [
   './puzzle-hard.jpg',
 ];
 
-// ★ 完全URLに変換するヘルパー（パス解決のズレを防ぐ）
 function completeURL(path) {
   return new URL(path, self.location).href;
 }
@@ -38,17 +33,25 @@ const INDEX_URL = completeURL('./index.html');
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME).then(async cache => {
-      // ★ Promise.allSettled で個別キャッシュ（1件失敗で全滅しない）
+      // 各ファイルを最大3回までリトライしてキャッシュする
+      async function cacheOneWithRetry(url, maxRetry = 3) {
+        let lastErr = null;
+        for (let i = 0; i < maxRetry; i++) {
+          try {
+            const res = await fetch(url, { cache: 'no-store' });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            await cache.put(url, res.clone());
+            return { url, ok: true, attempt: i + 1 };
+          } catch (err) {
+            lastErr = err;
+            await new Promise(r => setTimeout(r, 400));
+          }
+        }
+        return { url, ok: false, err: lastErr?.message };
+      }
+
       const results = await Promise.allSettled(
-        ASSETS.map(url =>
-          fetch(url, { cache: 'reload' }) // ★ ブラウザHTTPキャッシュを経由せず確実に取得
-            .then(res => {
-              if (!res.ok) throw new Error(`HTTP ${res.status}`);
-              return cache.put(url, res);
-            })
-            .then(() => ({ url, ok: true }))
-            .catch(err => ({ url, ok: false, err: err.message }))
-        )
+        ASSETS.map(url => cacheOneWithRetry(url))
       );
 
       const succeeded = results.filter(r => r.value?.ok).map(r => r.value.url);
@@ -63,7 +66,11 @@ self.addEventListener('install', event => {
         total: ASSETS.length,
         failedUrls: failed,
       });
-    }).then(() => self.skipWaiting())
+
+      // ★ 重要: ここでは skipWaiting() を呼ばない。
+      // 手動更新方式では、ユーザーが明示的に「更新する」を押すまで
+      // 現在動いているSWを維持し、新しいSWは waiting 状態のまま待機させる。
+    })
   );
 });
 
@@ -84,49 +91,41 @@ self.addEventListener('activate', event => {
   );
 });
 
-/* ---------- フェッチ ---------- */
+/* ---------- フェッチ：Cache Only（完全オフライン優先） ---------- */
 self.addEventListener('fetch', event => {
   const req = event.request;
 
-  // ★ GET以外・http以外はスルー（POST等はSWを介さず素通り）
   if (req.method !== 'GET') return;
   if (!req.url.startsWith('http')) return;
 
-  // ★★★ 最重要: ナビゲーションリクエストはキャッシュ最優先 ★★★
-  // ページ読み込み自体(URLバー/ホーム画面アイコンからの起動)が
-  // network-firstだと、SW休止直後の機内モードでブラウザ標準の
-  // ERR_FAILED画面が先に出てしまう。必ずキャッシュを先に見る。
+  // ナビゲーションリクエスト → 常にキャッシュのindex.htmlを返す
   if (req.mode === 'navigate') {
     event.respondWith(
       caches.match(INDEX_URL).then(cached => {
         if (cached) return cached;
-        // キャッシュに無ければネットワークを試し、失敗時もindex.htmlへフォールバック
+        // 万一キャッシュに無い場合のみネットワークにフォールバック
         return fetch(req).catch(() => caches.match(INDEX_URL));
       })
     );
     return;
   }
 
-  // 通常リソース: Cache First
+  // 通常リソース → Cache Only
+  // ネットワークには問い合わせない。無ければ諦める（更新ボタンで取得する）
   event.respondWith(
     caches.match(req).then(cached => {
       if (cached) return cached;
-      return fetch(req).then(res => {
-        if (!res || res.status !== 200 || res.type === 'opaque') return res;
-        const clone = res.clone();
-        caches.open(CACHE_NAME).then(c => c.put(req, clone));
-        return res;
-      }).catch(() => {
-        console.warn('[SW] オフライン & キャッシュなし:', req.url);
+      // キャッシュに無ければネットワークを一応試す（初回未キャッシュ時の保険）
+      return fetch(req).catch(() => {
+        console.warn('[SW] キャッシュなし・オフライン:', req.url);
       });
     })
   );
 });
 
-/* ---------- 診断用メッセージハンドラ ---------- */
-// index.html の診断パネルから状態確認リクエストを受け取り、
-// キャッシュ内容・バージョン情報を返す
+/* ---------- メッセージハンドラ ---------- */
 self.addEventListener('message', event => {
+  // 診断パネルからのキャッシュ内容問い合わせ
   if (event.data?.type === 'GET_DIAGNOSTIC') {
     event.waitUntil(
       caches.open(CACHE_NAME).then(cache => cache.keys()).then(keys => {
@@ -141,6 +140,12 @@ self.addEventListener('message', event => {
         });
       })
     );
+  }
+
+  // ★ 手動更新方式の核心: ユーザーが「更新する」を押した時だけ
+  //   waiting中の新SWを有効化する
+  if (event.data?.type === 'SKIP_WAITING') {
+    self.skipWaiting();
   }
 });
 
