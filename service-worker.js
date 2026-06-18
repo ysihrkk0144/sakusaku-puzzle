@@ -1,19 +1,21 @@
 /* ============================================================
    service-worker.js — さくさくスライドパズル
-   バージョン: v9
-   変更点:
+   バージョン: v10
+   変更点（今回の修正）:
+     - キャッシュキーを new URL(path, self.location).href で完全URL化
+     - fetch: navigation リクエストはキャッシュ最優先（network-first しない）
      - Promise.allSettled で個別キャッシュ（1ファイル失敗で全滅しない）
-     - service-worker.js 自体はキャッシュリストから除外
-     - GETリクエスト以外はスルー
-     - キャッシュ完了をクライアントにメッセージ通知
-     - ナビゲーションリクエストを最優先でキャッシュから返す
-       （SW休止直後の機内モード起動でERR_FAILEDになる問題への対策）
+     - service-worker.js 自体はASSETSに含めない
+     - GET以外・http以外はスルー
+     - 診断用: 現在のキャッシュ内容をpostMessageで返すハンドラを追加
 ============================================================ */
 
-const CACHE_NAME = 'sakusaku-puzzle-v9';
+const SW_VERSION = 'v10';
+const CACHE_NAME = `sakusaku-puzzle-${SW_VERSION}`;
 
 // ★ service-worker.js 自体はリストに含めない
-const ASSETS = [
+// ★ 相対パスで記述し、使用時に completeURL() で完全URL化する
+const ASSET_PATHS = [
   './',
   './index.html',
   './manifest.json',
@@ -24,33 +26,43 @@ const ASSETS = [
   './puzzle-hard.jpg',
 ];
 
+// ★ 完全URLに変換するヘルパー（パス解決のズレを防ぐ）
+function completeURL(path) {
+  return new URL(path, self.location).href;
+}
+
+const ASSETS = ASSET_PATHS.map(completeURL);
+const INDEX_URL = completeURL('./index.html');
+
 /* ---------- インストール ---------- */
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME).then(async cache => {
-      // ★ Promise.allSettled で個別キャッシュ
-      // 1ファイルが404などで失敗しても他のファイルのキャッシュは継続する
+      // ★ Promise.allSettled で個別キャッシュ（1件失敗で全滅しない）
       const results = await Promise.allSettled(
         ASSETS.map(url =>
-          cache.add(url).then(() => ({ url, ok: true }))
-                        .catch(err => ({ url, ok: false, err: err.message }))
+          fetch(url, { cache: 'reload' }) // ★ ブラウザHTTPキャッシュを経由せず確実に取得
+            .then(res => {
+              if (!res.ok) throw new Error(`HTTP ${res.status}`);
+              return cache.put(url, res);
+            })
+            .then(() => ({ url, ok: true }))
+            .catch(err => ({ url, ok: false, err: err.message }))
         )
       );
 
-      // キャッシュ結果をログ出力
       const succeeded = results.filter(r => r.value?.ok).map(r => r.value.url);
       const failed    = results.filter(r => !r.value?.ok).map(r => r.value?.url);
       console.log('[SW] キャッシュ成功:', succeeded);
       if (failed.length > 0) console.warn('[SW] キャッシュ失敗:', failed);
 
-      // ★ 完了通知をクライアントに送る（バナー表示用）
-      const clients = await self.clients.matchAll({ includeUncontrolled: true });
-      clients.forEach(client => client.postMessage({
-        type:      'CACHE_DONE',
+      await notifyClients({
+        type: 'CACHE_DONE',
         succeeded: succeeded.length,
-        failed:    failed.length,
-        total:     ASSETS.length,
-      }));
+        failed: failed.length,
+        total: ASSETS.length,
+        failedUrls: failed,
+      });
     }).then(() => self.skipWaiting())
   );
 });
@@ -65,47 +77,75 @@ self.addEventListener('activate', event => {
           return caches.delete(k);
         })
       )
-    ).then(() => self.clients.claim())
+    ).then(async () => {
+      await self.clients.claim();
+      await notifyClients({ type: 'SW_ACTIVATED', version: SW_VERSION });
+    })
   );
 });
 
-/* ---------- フェッチ（Cache First + ナビゲーション優先処理） ---------- */
+/* ---------- フェッチ ---------- */
 self.addEventListener('fetch', event => {
-  // ★ GETリクエスト以外・http以外はスルー
-  if (event.request.method !== 'GET') return;
-  if (!event.request.url.startsWith('http')) return;
+  const req = event.request;
 
-  // ★ ナビゲーションリクエスト（ページ読み込み自体）を最優先処理
-  // SWが一時的に非アクティブだった直後でも、機内モード時に
-  // ブラウザ標準のERR_FAILED画面が出る前にキャッシュのindex.htmlを返す
-  if (event.request.mode === 'navigate') {
+  // ★ GET以外・http以外はスルー（POST等はSWを介さず素通り）
+  if (req.method !== 'GET') return;
+  if (!req.url.startsWith('http')) return;
+
+  // ★★★ 最重要: ナビゲーションリクエストはキャッシュ最優先 ★★★
+  // ページ読み込み自体(URLバー/ホーム画面アイコンからの起動)が
+  // network-firstだと、SW休止直後の機内モードでブラウザ標準の
+  // ERR_FAILED画面が先に出てしまう。必ずキャッシュを先に見る。
+  if (req.mode === 'navigate') {
     event.respondWith(
-      caches.match('./index.html').then(cached => {
+      caches.match(INDEX_URL).then(cached => {
         if (cached) return cached;
-        // キャッシュがなければ通常のネットワーク取得にフォールバック
-        return fetch(event.request).catch(() =>
-          caches.match('./index.html')
-        );
+        // キャッシュに無ければネットワークを試し、失敗時もindex.htmlへフォールバック
+        return fetch(req).catch(() => caches.match(INDEX_URL));
       })
     );
     return;
   }
 
+  // 通常リソース: Cache First
   event.respondWith(
-    caches.match(event.request).then(cached => {
-      // キャッシュヒット → そのまま返す
+    caches.match(req).then(cached => {
       if (cached) return cached;
-
-      // キャッシュミス → ネットワークから取得してキャッシュに追加
-      return fetch(event.request).then(res => {
+      return fetch(req).then(res => {
         if (!res || res.status !== 200 || res.type === 'opaque') return res;
         const clone = res.clone();
-        caches.open(CACHE_NAME).then(c => c.put(event.request, clone));
+        caches.open(CACHE_NAME).then(c => c.put(req, clone));
         return res;
       }).catch(() => {
-        // オフライン & キャッシュなし → 何も返さない
-        console.warn('[SW] オフライン & キャッシュなし:', event.request.url);
+        console.warn('[SW] オフライン & キャッシュなし:', req.url);
       });
     })
   );
 });
+
+/* ---------- 診断用メッセージハンドラ ---------- */
+// index.html の診断パネルから状態確認リクエストを受け取り、
+// キャッシュ内容・バージョン情報を返す
+self.addEventListener('message', event => {
+  if (event.data?.type === 'GET_DIAGNOSTIC') {
+    event.waitUntil(
+      caches.open(CACHE_NAME).then(cache => cache.keys()).then(keys => {
+        const cachedUrls = keys.map(k => k.url);
+        event.source.postMessage({
+          type: 'DIAGNOSTIC_RESULT',
+          version: SW_VERSION,
+          cacheName: CACHE_NAME,
+          cachedCount: cachedUrls.length,
+          cachedUrls,
+          expectedCount: ASSETS.length,
+        });
+      })
+    );
+  }
+});
+
+/* ---------- 全クライアントへ通知するヘルパー ---------- */
+async function notifyClients(payload) {
+  const clientsList = await self.clients.matchAll({ includeUncontrolled: true });
+  clientsList.forEach(client => client.postMessage(payload));
+}

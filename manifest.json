@@ -2,7 +2,7 @@
   "name": "さくさくスライドパズル",
   "short_name": "スライドパズル",
   "description": "海と魚のかわいいスライドパズルゲーム",
-  "start_url": "./index.html",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",

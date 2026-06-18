@@ -243,6 +243,75 @@
       padding: 0 4px;
       line-height: 1;
     }
+
+    /* ════ 診断パネル ════ */
+    #diag-toggle-btn {
+      position: fixed;
+      bottom: 10px; right: 10px;
+      z-index: 998;
+      background: rgba(0,0,0,0.55);
+      color: #90E0EF;
+      border: 1px solid rgba(144,224,239,0.4);
+      border-radius: 8px;
+      font-size: 11px;
+      padding: 6px 10px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    #diag-panel {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      background: rgba(5,15,35,0.97);
+      color: #B3E5FC;
+      padding: 14px;
+      overflow-y: auto;
+      font-family: 'Courier New', monospace;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    #diag-panel.hidden { display: none; }
+    .diag-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 15px;
+      font-weight: 900;
+      color: white;
+      font-family: 'Hiragino Sans', sans-serif;
+      border-bottom: 1px solid rgba(255,255,255,0.15);
+      padding-bottom: 8px;
+    }
+    .diag-header button {
+      background: none; border: none; color: white;
+      font-size: 18px; cursor: pointer;
+    }
+    .diag-section { display: flex; flex-direction: column; gap: 4px; }
+    .diag-label {
+      font-size: 11px; color: #FFD54F; font-weight: 700;
+      font-family: 'Hiragino Sans', sans-serif;
+      letter-spacing: 0.05em;
+    }
+    #diag-panel pre {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 11px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+    .diag-refresh {
+      background: linear-gradient(135deg,#0077B6,#023E8A);
+      color: white; border: none; border-radius: 8px;
+      padding: 10px; font-size: 13px; font-weight: 700;
+      cursor: pointer; font-family: 'Hiragino Sans', sans-serif;
+    }
+
     @media (prefers-reduced-motion:reduce) {
       .puzzle-board div,.screen,.modal-overlay,.title-waves svg { transition:none!important; animation:none!important; }
     }
@@ -339,6 +408,26 @@
 <div id="cache-banner">
   <span id="cache-banner-msg">📦 オフライン用データを保存中...</span>
   <button id="cache-banner-close" onclick="document.getElementById('cache-banner').classList.remove('show')">✕</button>
+</div>
+
+<!-- ══ 診断パネル開閉ボタン ══ -->
+<button id="diag-toggle-btn" onclick="toggleDiagnosticPanel()">🔧 診断</button>
+
+<!-- ══ 診断パネル本体 ══ -->
+<div id="diag-panel" class="hidden">
+  <div class="diag-header">
+    <span>🔧 SW診断パネル</span>
+    <button onclick="toggleDiagnosticPanel()">✕</button>
+  </div>
+  <div class="diag-section">
+    <div class="diag-label">登録状態</div>
+    <pre id="diag-text">(まだ取得していません)</pre>
+  </div>
+  <div class="diag-section">
+    <div class="diag-label">キャッシュ内容</div>
+    <pre id="diag-cache">(まだ取得していません)</pre>
+  </div>
+  <button class="diag-refresh" onclick="updateDiagnosticPanel()">🔄 再取得</button>
 </div>
 
 <script>
@@ -638,30 +727,57 @@ document.getElementById('modal-title').addEventListener('click', ()=>{ document.
 window.addEventListener('resize', ()=>{ if(!SCREENS.game.classList.contains('hidden')){ calcTileSize(); renderBoard(); } });
 
 /* ================================================================
-   Service Worker
+   Service Worker + 診断パネル
 ================================================================ */
+let swRegistration = null;
+
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./service-worker.js', { scope: './' })
+    // ★ updateViaCache: "none" — ブラウザのHTTPキャッシュを経由せず
+    //   service-worker.js 自体を常に最新版で取得・比較させる
+    navigator.serviceWorker.register('./service-worker.js', {
+      scope: './',
+      updateViaCache: 'none',
+    })
       .then(reg => {
+        swRegistration = reg;
         console.log('[SW] 登録完了:', reg.scope);
+        updateDiagnosticPanel();
       })
       .catch(e => {
         console.warn('[SW] 登録失敗:', e);
-        // 登録失敗バナー
         showCacheBanner('❌ オフライン準備に失敗しました', true);
+        updateDiagnosticPanel();
       });
 
-    // SW からのメッセージ受信（キャッシュ完了通知）
+    // SW からのメッセージ受信
     navigator.serviceWorker.addEventListener('message', event => {
-      if (event.data?.type === 'CACHE_DONE') {
-        const { succeeded, failed, total } = event.data;
+      const data = event.data || {};
+
+      if (data.type === 'CACHE_DONE') {
+        const { succeeded, failed, total } = data;
         if (failed === 0) {
           showCacheBanner(`✅ オフライン準備完了！ (${succeeded}/${total}件)`);
         } else {
           showCacheBanner(`⚠️ 一部未保存 (${succeeded}/${total}件成功、${failed}件失敗)`, true);
         }
+        updateDiagnosticPanel();
       }
+
+      if (data.type === 'SW_ACTIVATED') {
+        console.log('[SW] activated version:', data.version);
+        updateDiagnosticPanel();
+      }
+
+      if (data.type === 'DIAGNOSTIC_RESULT') {
+        renderDiagnosticResult(data);
+      }
+    });
+
+    // controllerの変化も監視（古いSW→新SW切替の検知）
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      console.log('[SW] controller changed');
+      updateDiagnosticPanel();
     });
   });
 }
@@ -673,8 +789,54 @@ function showCacheBanner(msg, isError = false) {
   msgEl.textContent = msg;
   banner.classList.toggle('error', isError);
   banner.classList.add('show');
-  // 4秒後に自動非表示
   setTimeout(() => banner.classList.remove('show'), 4000);
+}
+
+/* ── 診断パネル ── */
+function updateDiagnosticPanel() {
+  const panel = document.getElementById('diag-panel');
+  if (!panel) return;
+
+  const lines = [];
+  lines.push(`URL: ${location.href}`);
+  lines.push(`SW対応: ${'serviceWorker' in navigator ? 'あり' : 'なし'}`);
+
+  if (navigator.serviceWorker) {
+    const reg = swRegistration;
+    lines.push(`登録scope: ${reg ? reg.scope : '(未登録)'}`);
+    lines.push(`active: ${reg?.active ? reg.active.state : 'なし'}`);
+    lines.push(`waiting: ${reg?.waiting ? reg.waiting.state : 'なし'}`);
+    lines.push(`installing: ${reg?.installing ? reg.installing.state : 'なし'}`);
+    lines.push(`controller: ${navigator.serviceWorker.controller ? 'あり' : 'なし（重要：なしだとSW未介入）'}`);
+  }
+
+  document.getElementById('diag-text').textContent = lines.join('\n');
+
+  // SWにキャッシュ内容も問い合わせる
+  if (navigator.serviceWorker.controller) {
+    navigator.serviceWorker.controller.postMessage({ type: 'GET_DIAGNOSTIC' });
+  } else {
+    document.getElementById('diag-cache').textContent = '(controllerなし: キャッシュ内容を問い合わせ不可)';
+  }
+}
+
+function renderDiagnosticResult(data) {
+  const el = document.getElementById('diag-cache');
+  if (!el) return;
+  const lines = [
+    `SWバージョン: ${data.version}`,
+    `キャッシュ名: ${data.cacheName}`,
+    `キャッシュ済み: ${data.cachedCount} / 期待値 ${data.expectedCount}`,
+    '── キャッシュ済みURL一覧 ──',
+    ...data.cachedUrls.map(u => '  ' + u.replace(location.origin, '')),
+  ];
+  el.textContent = lines.join('\n');
+}
+
+function toggleDiagnosticPanel() {
+  const panel = document.getElementById('diag-panel');
+  const isHidden = panel.classList.toggle('hidden');
+  if (!isHidden) updateDiagnosticPanel();
 }
 
 /* ── 初期化 ── */
