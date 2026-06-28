@@ -1,15 +1,10 @@
 /* ============================================================
    service-worker.js — さくさくスライドパズル
-   バージョン: v12
-   方針転換: 完全オフライン優先 + 手動更新方式
-   ─────────────────────────────────────────────────────────
-   ・通常時はネットワークに一切問い合わせない（Cache Only）
-   ・更新は「更新確認」ボタンを押した時だけ実行する
-   ・これにより「裏で勝手に動く自動更新」と
-     「機内モードのタイミング」が衝突する問題を根本的に回避する
+   バージョン: v13
+   方針: 完全オフライン優先 + 手動更新方式（Cache Only）
 ============================================================ */
 
-const SW_VERSION = 'v12';
+const SW_VERSION = 'v13';
 const CACHE_NAME = `sakusaku-puzzle-${SW_VERSION}`;
 
 const ASSET_PATHS = [
@@ -29,47 +24,53 @@ function completeURL(path) {
 const ASSETS = ASSET_PATHS.map(completeURL);
 const INDEX_URL = completeURL('./index.html');
 
+/* ---------- キャッシュ実行本体（install時・CACHE_NOW共通で使う） ---------- */
+async function runCaching(cache) {
+  // 各ファイルを最大3回リトライ。cacheオプションは no-store とデフォルトを交互に試す
+  async function cacheOneWithRetry(url, maxRetry = 3) {
+    let lastErr = null;
+    for (let i = 0; i < maxRetry; i++) {
+      const cacheMode = (i % 2 === 0) ? 'no-store' : 'default';
+      try {
+        const res = await fetch(url, { cache: cacheMode });
+        if (!res.ok) throw new Error(`HTTP ${res.status} (mode:${cacheMode})`);
+        await cache.put(url, res.clone());
+        return { url, ok: true, attempt: i + 1, mode: cacheMode };
+      } catch (err) {
+        lastErr = err;
+        await new Promise(r => setTimeout(r, 400));
+      }
+    }
+    return { url, ok: false, err: lastErr?.message };
+  }
+
+  const results = await Promise.allSettled(
+    ASSETS.map(url => cacheOneWithRetry(url))
+  );
+
+  const succeeded = results.filter(r => r.value?.ok).map(r => r.value.url);
+  const failedDetails = results
+    .filter(r => !r.value?.ok)
+    .map(r => ({ url: r.value?.url, err: r.value?.err || 'unknown' }));
+
+  console.log('[SW] キャッシュ成功:', succeeded);
+  if (failedDetails.length > 0) console.warn('[SW] キャッシュ失敗詳細:', failedDetails);
+
+  return {
+    succeeded: succeeded.length,
+    failed: failedDetails.length,
+    total: ASSETS.length,
+    failedDetails,
+  };
+}
+
 /* ---------- インストール ---------- */
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME).then(async cache => {
-      // 各ファイルを最大3回までリトライしてキャッシュする
-      async function cacheOneWithRetry(url, maxRetry = 3) {
-        let lastErr = null;
-        for (let i = 0; i < maxRetry; i++) {
-          try {
-            const res = await fetch(url, { cache: 'no-store' });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            await cache.put(url, res.clone());
-            return { url, ok: true, attempt: i + 1 };
-          } catch (err) {
-            lastErr = err;
-            await new Promise(r => setTimeout(r, 400));
-          }
-        }
-        return { url, ok: false, err: lastErr?.message };
-      }
-
-      const results = await Promise.allSettled(
-        ASSETS.map(url => cacheOneWithRetry(url))
-      );
-
-      const succeeded = results.filter(r => r.value?.ok).map(r => r.value.url);
-      const failed    = results.filter(r => !r.value?.ok).map(r => r.value?.url);
-      console.log('[SW] キャッシュ成功:', succeeded);
-      if (failed.length > 0) console.warn('[SW] キャッシュ失敗:', failed);
-
-      await notifyClients({
-        type: 'CACHE_DONE',
-        succeeded: succeeded.length,
-        failed: failed.length,
-        total: ASSETS.length,
-        failedUrls: failed,
-      });
-
-      // ★ 重要: ここでは skipWaiting() を呼ばない。
-      // 手動更新方式では、ユーザーが明示的に「更新する」を押すまで
-      // 現在動いているSWを維持し、新しいSWは waiting 状態のまま待機させる。
+      const result = await runCaching(cache);
+      await notifyClients({ type: 'CACHE_DONE', ...result });
+      // ★ skipWaiting() はここで呼ばない（手動更新方式のため）
     })
   );
 });
@@ -91,31 +92,26 @@ self.addEventListener('activate', event => {
   );
 });
 
-/* ---------- フェッチ：Cache Only（完全オフライン優先） ---------- */
+/* ---------- フェッチ：Cache Only ---------- */
 self.addEventListener('fetch', event => {
   const req = event.request;
 
   if (req.method !== 'GET') return;
   if (!req.url.startsWith('http')) return;
 
-  // ナビゲーションリクエスト → 常にキャッシュのindex.htmlを返す
   if (req.mode === 'navigate') {
     event.respondWith(
       caches.match(INDEX_URL).then(cached => {
         if (cached) return cached;
-        // 万一キャッシュに無い場合のみネットワークにフォールバック
         return fetch(req).catch(() => caches.match(INDEX_URL));
       })
     );
     return;
   }
 
-  // 通常リソース → Cache Only
-  // ネットワークには問い合わせない。無ければ諦める（更新ボタンで取得する）
   event.respondWith(
     caches.match(req).then(cached => {
       if (cached) return cached;
-      // キャッシュに無ければネットワークを一応試す（初回未キャッシュ時の保険）
       return fetch(req).catch(() => {
         console.warn('[SW] キャッシュなし・オフライン:', req.url);
       });
@@ -142,10 +138,23 @@ self.addEventListener('message', event => {
     );
   }
 
-  // ★ 手動更新方式の核心: ユーザーが「更新する」を押した時だけ
-  //   waiting中の新SWを有効化する
+  // ★ 手動更新方式の核心: 「更新する」ボタンからのみ送信される
   if (event.data?.type === 'SKIP_WAITING') {
     self.skipWaiting();
+  }
+
+  // ★ 「キャッシュを今すぐ手動で再取得する」ボタンから送信される
+  if (event.data?.type === 'CACHE_NOW') {
+    event.waitUntil(
+      (async () => {
+        const cache = await caches.open(CACHE_NAME);
+        const result = await runCaching(cache);
+        const client = event.source;
+        if (client) {
+          client.postMessage({ type: 'CACHE_NOW_RESULT', ...result });
+        }
+      })()
+    );
   }
 });
 

@@ -348,6 +348,12 @@
       padding: 10px; font-size: 13px; font-weight: 700;
       cursor: pointer; font-family: 'Hiragino Sans', sans-serif;
     }
+    .diag-cachenow {
+      background: linear-gradient(135deg,#E65100,#BF360C);
+      color: white; border: none; border-radius: 8px;
+      padding: 10px; font-size: 13px; font-weight: 700;
+      cursor: pointer; font-family: 'Hiragino Sans', sans-serif;
+    }
 
     @media (prefers-reduced-motion:reduce) {
       .puzzle-board div,.screen,.modal-overlay,.title-waves svg { transition:none!important; animation:none!important; }
@@ -473,7 +479,12 @@
     <div class="diag-label">キャッシュ内容</div>
     <pre id="diag-cache">(まだ取得していません)</pre>
   </div>
+  <div class="diag-section">
+    <div class="diag-label">直近のキャッシュ失敗詳細</div>
+    <pre id="diag-failed">(失敗ファイルなし)</pre>
+  </div>
   <button class="diag-refresh" onclick="updateDiagnosticPanel()">🔄 再取得</button>
+  <button class="diag-cachenow" onclick="cacheNow()">📥 キャッシュを今すぐ手動で再取得する</button>
   <button class="diag-update-check" onclick="checkForUpdate()">🌐 最新版を確認（オンライン時のみ）</button>
 </div>
 
@@ -781,8 +792,26 @@ window.addEventListener('resize', ()=>{ if(!SCREENS.game.classList.contains('hid
    ・「最新版を確認」ボタンを押した時だけ reg.update() を呼ぶ
    ・新バージョンが見つかったら確認ダイアログを出し、
      同意を得てから skipWaiting → リロードする
+   ・ページロード時点で既に reg.waiting がある場合も即座に検知する
+   ・ストレージ永続化をリクエストし、ブラウザによる
+     Cache Storageの自動削除を防ぐ
 ================================================================ */
 let swRegistration = null;
+let lastFailedDetails = [];
+
+// ★ ストレージ永続化リクエスト（許可されるかはブラウザ依存）
+if (navigator.storage && navigator.storage.persist) {
+  navigator.storage.persist().then(granted => {
+    window.__storagePersisted = granted;
+    console.log('[Storage] 永続化:', granted ? '許可' : '不許可');
+    updateDiagnosticPanel();
+  }).catch(e => {
+    window.__storagePersisted = null;
+    console.warn('[Storage] persist()エラー:', e);
+  });
+} else {
+  window.__storagePersisted = 'unsupported';
+}
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
@@ -795,7 +824,8 @@ if ('serviceWorker' in navigator) {
         console.log('[SW] 登録完了:', reg.scope);
         updateDiagnosticPanel();
 
-        // すでにwaiting中の新SWがある場合（前回チェック済みで未適用）
+        // ★ ページロード時点で既にwaiting中の新SWがある場合を検知
+        //   （updatefoundイベントだけでは検知できないケースへの対応）
         if (reg.waiting) {
           showUpdateBanner();
         }
@@ -806,7 +836,6 @@ if ('serviceWorker' in navigator) {
           if (!newWorker) return;
           newWorker.addEventListener('statechange', () => {
             if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-              // 新バージョンのインストールが完了し、適用待ち状態になった
               showUpdateBanner();
             }
           });
@@ -822,7 +851,8 @@ if ('serviceWorker' in navigator) {
       const data = event.data || {};
 
       if (data.type === 'CACHE_DONE') {
-        const { succeeded, failed, total } = data;
+        const { succeeded, failed, total, failedDetails } = data;
+        lastFailedDetails = failedDetails || [];
         if (failed === 0) {
           showCacheBanner(`✅ オフライン準備完了！ (${succeeded}/${total}件)`);
         } else {
@@ -839,10 +869,21 @@ if ('serviceWorker' in navigator) {
       if (data.type === 'DIAGNOSTIC_RESULT') {
         renderDiagnosticResult(data);
       }
+
+      if (data.type === 'CACHE_NOW_RESULT') {
+        window.__cacheNowResponded = true;
+        const { succeeded, failed, total, failedDetails } = data;
+        lastFailedDetails = failedDetails || [];
+        if (failed === 0) {
+          showCacheBanner(`✅ 再取得完了！ (${succeeded}/${total}件)`);
+        } else {
+          showCacheBanner(`⚠️ 再取得で一部失敗 (${succeeded}/${total}件成功)`, true);
+        }
+        updateDiagnosticPanel();
+      }
     });
 
     // 新SWが有効化されてcontrollerが切り替わったらリロードする
-    // （「更新する」を押した直後のみ発生する）
     let reloading = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       console.log('[SW] controller changed');
@@ -865,9 +906,10 @@ function checkForUpdate() {
   showCacheBanner('🔍 最新版を確認中...');
   swRegistration.update()
     .then(() => {
-      // updatefoundが発火しなければ「最新版です」
       setTimeout(() => {
-        if (!swRegistration.waiting && !swRegistration.installing) {
+        if (swRegistration.waiting) {
+          showUpdateBanner();
+        } else if (!swRegistration.installing) {
           showCacheBanner('✅ 既に最新版です');
         }
       }, 1500);
@@ -878,7 +920,32 @@ function checkForUpdate() {
     });
 }
 
-/* ── 更新通知バナー（適用するか選べる） ── */
+/* ── キャッシュを今すぐ手動で再取得する ── */
+function cacheNow() {
+  if (!navigator.serviceWorker.controller) {
+    alert('⚠️ Service Workerがこのページを制御していません。\n一度アプリを開き直してから試してください。');
+    return;
+  }
+  window.__cacheNowResponded = false;
+  showCacheBanner('📥 キャッシュを再取得中...');
+  navigator.serviceWorker.controller.postMessage({ type: 'CACHE_NOW' });
+
+  // ★ 3秒応答が無ければ「古いSWが原因の可能性」をアラート案内
+  setTimeout(() => {
+    if (!window.__cacheNowResponded) {
+      alert(
+        '⏱️ 3秒応答がありませんでした。\n' +
+        '古いService Workerが残っている可能性があります。\n\n' +
+        '対処方法：\n' +
+        '1. このアプリをホーム画面からアンインストール\n' +
+        '2. Chromeのサイト設定からストレージを消去\n' +
+        '3. オンラインで再度開いてインストールし直してください'
+      );
+    }
+  }, 3000);
+}
+
+/* ── 更新通知バナー ── */
 function showUpdateBanner() {
   const banner = document.getElementById('update-banner');
   if (banner) banner.classList.add('show');
@@ -913,6 +980,13 @@ function updateDiagnosticPanel() {
   lines.push(`URL: ${location.href}`);
   lines.push(`SW対応: ${'serviceWorker' in navigator ? 'あり' : 'なし'}`);
 
+  // ストレージ永続化の状態
+  let persistText = '判定中...';
+  if (window.__storagePersisted === true) persistText = '許可 ✅';
+  else if (window.__storagePersisted === false) persistText = '不許可 ⚠️（自動削除のリスクあり）';
+  else if (window.__storagePersisted === 'unsupported') persistText = '未対応ブラウザ';
+  lines.push(`ストレージ永続化: ${persistText}`);
+
   if (navigator.serviceWorker) {
     const reg = swRegistration;
     lines.push(`登録scope: ${reg ? reg.scope : '(未登録)'}`);
@@ -930,6 +1004,22 @@ function updateDiagnosticPanel() {
   } else {
     document.getElementById('diag-cache').textContent = '(controllerなし: キャッシュ内容を問い合わせ不可)';
   }
+
+  // 直近の失敗詳細を表示
+  renderFailedDetails();
+}
+
+function renderFailedDetails() {
+  const el = document.getElementById('diag-failed');
+  if (!el) return;
+  if (!lastFailedDetails || lastFailedDetails.length === 0) {
+    el.textContent = '(失敗ファイルなし)';
+    return;
+  }
+  const lines = lastFailedDetails.map(f =>
+    `❌ ${(f.url || '').replace(location.origin, '')}\n   理由: ${f.err || '不明'}`
+  );
+  el.textContent = lines.join('\n\n');
 }
 
 function renderDiagnosticResult(data) {
